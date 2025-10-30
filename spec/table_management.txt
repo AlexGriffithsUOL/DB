@@ -1,0 +1,31 @@
+
+
+PAGES 2 AND 3 are initially reserved for the system_tables, system_columns metadata
+
+Example: system_tables schema
+system_tables_schema = Schema([
+    ('table_id', DataType.INTEGER),
+    ('table_name', DataType.STRING),
+    ('first_page_id', DataType.INTEGER),
+])
+
+Example: system_columns schema
+system_columns_schema = Schema([
+    ('table_id', DataType.INTEGER),
+    ('column_name', DataType.STRING),
+    ('data_type', DataType.STRING),
+    ('ordinal_position', DataType.INTEGER),
+])
+
+
+
+table_id	table_name	first_page_id
+1	'system_tables'	0
+2	'system_columns'	1
+
+And the system_columns entries that describe system_tables:
+
+table_id	column_name	data_type	ordinal_position
+1	'table_id'	'int'	0
+1	'table_name'	'string'	1
+1	'first_page_id'	'int'	2
