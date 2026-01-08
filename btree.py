@@ -40,16 +40,16 @@ for i in range(3000):
     
     # if i == 234:
     #     print('catch 234')
-    #     bti.insert(record['test_id'], (page_id, slot_id)) # needs to be able to handle fcking integers and strings
+    #     bti.insert(record['test_id'], (page_id, slot_id)) # needs to be able to handle integers and strings
     #     continue
     if i == 235:
         print('catch 235')
-        bti.insert(record['test_id'], (page_id, slot_id)) # needs to be able to handle fcking integers and strings
+        bti.insert(record['test_id'], (page_id, slot_id)) # needs to be able to handle integers and strings
         continue
     
     if i == 380 or i == 379: # appears to not be saving on 379
         print(f'catch {i}')
-        bti.insert(record['test_id'], (page_id, slot_id)) # needs to be able to handle fcking integers and strings
+        bti.insert(record['test_id'], (page_id, slot_id)) # needs to be able to handle integers and strings
         continue
     
     # if i == 793:
@@ -57,7 +57,7 @@ for i in range(3000):
     # if i == 794:
     #     print('catch 794')
     
-    bti.insert(record['test_id'], (page_id, slot_id)) # needs to be able to handle fcking integers and strings
+    bti.insert(record['test_id'], (page_id, slot_id)) # needs to be able to handle integers and strings
     
 print(bti.search(0))
 print(bti.search(1))
