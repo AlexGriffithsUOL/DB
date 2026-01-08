@@ -9,6 +9,9 @@ class Table:
         self.schema = schema
         self.first_page_id = first_page_id
         self.page_allocator:PageAllocator = page_allocator
+        
+    def __repr__(self):
+        return f'Table({self.name}, {self.first_page_id}, {self.schema})'
     
     def insert(self, record: dict):
         page = self.page_allocator.get_page(self.first_page_id)

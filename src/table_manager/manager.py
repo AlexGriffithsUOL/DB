@@ -3,7 +3,7 @@ from src.config import ENDIAN_TYPE
 from src.records.structured_records import DataType, Schema, StructuredDataRecordPage
 from src.pages.allocator import PageAllocator
 from src.catalog.header import CatalogHeader
-from src.indices.tes import BTreeIndex
+from src.indices.btree import BTreeIndex
 
 class TableManager:
     @property
@@ -250,6 +250,80 @@ class TableManager:
         for column in relevant_columns:
             schema.fields.append((column['column_name'], column['data_type']))
         return schema
+    
+    def get_index_by_table_col(self, table_name, column_name):
+        if table_name in self.tables:
+            table_records = self.system_tables.scan_all_records()
+            table_record = None
+            
+            for record in table_records:
+                if record['table_name'] == table_name:
+                    table_record = record
+                    break
+                    
+            if table_record is not None:
+                records = self.system_indexes.scan_all_records()
+                table_indexes = [x for x in records if x['table_id'] == table_record['table_id']]
+                
+                for i in table_indexes:
+                    if i['column_name'] == column_name:
+                        return i
+    
+    def table_column_has_index(self, table_name, column_name):
+        index = self.get_index_by_table_col(table_name, column_name)
+        
+        if index is not None:
+            return True
+        
+        return False
+    
+    def create_index(self, index_name, table_name, column_name, unique = False):
+        existing_index = self.get_index_by_table_col(table_name, column_name)
+        if existing_index is not None:
+            return existing_index
+        
+        all_tables = self.system_tables.scan_all_records()
+        
+        table = None
+        
+        for n in all_tables:
+            if n['table_name'] == table_name:
+                table = n
+                break
+        
+        indexes = self.system_indexes.scan_all_records()
+        index_ids = [i['index_id'] for i in indexes] + [-1]
+        new_index_id = max(index_ids) + 1
+        
+        column_records = self.system_columns.scan_all_records()
+        
+        column = None
+        
+        for o in column_records:
+            if o['column_name'] == column_name and o['table_id'] == table['table_id']:
+                column = o
+                break
+        
+        if column is not None:
+            bti = BTreeIndex(
+                page_allocator=self.page_allocator,
+                datatype=column['data_type']
+            )
+            eeee = {
+                'index_id': new_index_id,
+                'name': index_name,
+                'table_id': table['table_id'],
+                'column_name': column_name,
+                'root_page_id': bti.root_page_id,
+                'unique': str(unique)
+            }
+            self.system_indexes.insert(eeee)
+            
+            return bti
+            
+            
+            
+            
 
     def load_catalog(self, system_tables_pid = 2, system_columns_pid = 3):
         self.system_tables = Table(

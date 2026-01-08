@@ -1,0 +1,2 @@
+Currently when going through the pointer block creation + saving, it appears to jump up from page 13, then page 14 then 18
+running search then loads 23
