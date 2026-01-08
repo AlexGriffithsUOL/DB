@@ -146,9 +146,6 @@ class Table:
         for slot_num in range(structured_page.num_slots):
             if structured_page._slot_deleted(slot_num) == False:
                 raw = structured_page.read_slot(slot_num)
-                
-                # if raw is None:
-                #         print()
                         
                 record = self.deserialize(raw)
                 

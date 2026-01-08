@@ -65,7 +65,7 @@ class BTreeNode:
             else:
                 # Internal node: child pointers stored separately
                 # nothing here; keys only
-                # it appears we are not saving any pointers which is fucking up the loading
+                # it appears we are not saving any pointers which is messing up the loading
                 # Inline RID list
                 data[offset] = 0  # type flag
                 offset += 1
@@ -242,7 +242,7 @@ class BTreeNode:
         # check if node overflows
         size = 3 + 4
         for k, ptr in zip(self.keys, self.pointers):
-            if isinstance(ptr, int): # Why the fuck does this happen?
+            if isinstance(ptr, int):
                 size += 4 + len(k.encode('utf-8')) + 4  # key + block ref
             else:
                 size += self._size_of_entry(k, ptr)
@@ -337,21 +337,6 @@ class BTreeNode:
         right_node.save()
 
         return promoted_key, right_page_id
-
-    # def search(self, key):
-    #     if self.is_leaf:
-    #         for k, rid in zip(self.keys, self.pointers):
-    #             if k == key:
-    #                 return rid
-    #         return None
-    #     else:
-    #         pos = bisect.bisect_left(self.keys, key)
-    #         if pos == len(self.keys) or key < self.keys[pos]:
-    #             child_page = self.pointers[pos]
-    #         else:
-    #             child_page = self.pointers[pos + 1]
-    #         child = BTreeNode.load(self.page_allocator, child_page)
-    #         return child.search(key)
     
     def search(self, key):
         if self.is_leaf:
@@ -362,7 +347,7 @@ class BTreeNode:
                     current = block_id
                     while current:
                         block = PointerBlock.load(self.page_allocator, current)
-                        rids.extend(block.rids) ### Overflow page isn't working ITS NOT FUCKING WORKING THERE IS NOT 1.8k pages available
+                        rids.extend(block.rids) ### Overflow page isn't working ITS NOT WORKING THERE IS NOT 1.8k pages available
                         current = block.overflow_page
                     return rids
             return None

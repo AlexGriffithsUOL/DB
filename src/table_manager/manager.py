@@ -181,8 +181,7 @@ class TableManager:
             'unique' : True
         }
         self.system_indexes.insert()
-        # PLEASE PLEASE PLEASE INDEX SYSTEM TABLES ON TABLE_ID
-        
+        # TODO: PLEASE PLEASE PLEASE INDEX SYSTEM TABLES ON TABLE_ID
         # THEN INDEX SYSTEM_COLUMNS ON TABLE_ID
         # THEN INDEX SYSTEM INDEXES ON TABLE ID
         pass

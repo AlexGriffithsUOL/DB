@@ -51,9 +51,6 @@ class PointerBlock:
 
         return cls(page_allocator, rids, overflow_page)
 
-    # -------------------------------
-    # Operations
-    # -------------------------------
     def add_rid(self, rid):
         """Add a RID to this block. Returns overflow page if block is full."""
         # For simplicity, let's allow ~100 RIDs per block
