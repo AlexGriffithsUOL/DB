@@ -1,48 +1,53 @@
 from .table import Table
 from src.config import ENDIAN_TYPE
-from src.records.structured_records import DataType, Schema, StructuredDataRecordPage
+from src.records.structured_records import Schema, StructuredDataRecordPage
+from src.datatypes.classes import DataType, get_datatype
 from src.pages.allocator import PageAllocator
 from src.catalog.header import CatalogHeader
+from src.sequences.classes import INTERNAL_SEQUENCE_TABLE_NAME, SequenceManager
+# from src.indices.classes import BTreeIndex
 from src.indices.btree import BTreeIndex
 
 class TableManager:
     @property
     def _system_tables_schema_(self):
         return Schema([
-            ('table_id', DataType.INTEGER),
-            ('table_name', DataType.STRING),
-            ('first_page_id', DataType.INTEGER),
+            ('table_id', DataType.INTEGER, 30),
+            ('table_name', DataType.STRING, 30),
+            ('first_page_id', DataType.INTEGER, 30),
         ])
   
     @property
     def _system_columns_schema_(self):      
         return Schema([
-            ('table_id', DataType.INTEGER),
-            ('column_name', DataType.STRING),
-            ('data_type', DataType.STRING),
-            ('ordinal_position', DataType.INTEGER),
+            ('table_id', DataType.INTEGER, 30),
+            ('column_name', DataType.STRING, 30),
+            ('data_type', DataType.STRING, 30),
+            ('data_length', DataType.INTEGER, 30),
+            ('ordinal_position', DataType.INTEGER, 30),
         ])
         
     @property
     def _system_indexes_schema_(self):
         return Schema([
-            ('index_id', DataType.INTEGER),
-            ('name', DataType.STRING),
-            ('table_id', DataType.INTEGER),
-            ('column_name', DataType.STRING),
-            ('root_page_id', DataType.INTEGER),
-            ('unique', DataType.BOOLEAN)
+            ('index_id', DataType.INTEGER, 30),
+            ('name', DataType.STRING, 30),
+            ('table_id', DataType.INTEGER, 30),
+            ('column_name', DataType.STRING, 30),
+            ('root_page_id', DataType.INTEGER, 30),
+            ('unique', DataType.BOOLEAN, 1)
         ])
         
     @property
     def _system_sequences_schema_(self):
         return Schema([
-            ('sequence_id', DataType.INTEGER),
-            ('name', DataType.STRING),
-            ('current_value', DataType.INTEGER),
-            ('increment', DataType.INTEGER),
-            ('min_value', DataType.INTEGER),
-            ('cycle', DataType.BOOLEAN)
+            ('sequence_id', DataType.INTEGER, 30),
+            ('name', DataType.STRING, 30),
+            ('current_value', DataType.INTEGER, 30),
+            ('increment', DataType.INTEGER, 30),
+            ('min_value', DataType.INTEGER, 30),
+            ('cache', DataType.INTEGER, 30),
+            ('cycle', DataType.BOOLEAN, 1)
         ])
         
     def _schema_to_sys_cols_(self, schema, table_id):
@@ -54,6 +59,7 @@ class TableManager:
                     'table_id': table_id,
                     'column_name': field_data[0],
                     'data_type': field_data[1],
+                    'data_length': field_data[2],
                     'ordinal_position': i + 1
                 }
             )
@@ -85,12 +91,12 @@ class TableManager:
         system_columns_sys_table_record = {'table_id': 2, 'table_name': 'system_columns', 'first_page_id': 3}
         system_tables_page = StructuredDataRecordPage(self.page_allocator.get_page(2).data)
         
-        system_tables_page.insert_record(
+        sys_t_slot_ptr = system_tables_page.insert_record(
             schema = self._system_tables_schema_,
             record=system_tables_sys_table_record
         )
         
-        system_tables_page.insert_record(
+        sys_c_slot_ptr = system_tables_page.insert_record(
             schema=self._system_tables_schema_,
             record= system_columns_sys_table_record
         )
@@ -102,7 +108,25 @@ class TableManager:
         self.system_indexes = self.create_table('system_indexes', self._system_indexes_schema_)
     
     def _initialise_system_sequences_(self):
-        self.system_sequences = self.create_table('system_sequences', self._system_sequences_schema_)
+        self.system_sequences = self.create_table(INTERNAL_SEQUENCE_TABLE_NAME, self._system_sequences_schema_)
+        
+        initial_sequence = {
+            'sequence_id': 1,
+            'name': 'seq_system_sequence_id',
+            'current_value': 1,
+            'increment': 1,
+            'min_value': 1,
+            'cache': 1,
+            'cycle': 'False'
+        }
+        
+        self.system_sequences.insert(initial_sequence)
+        
+    def table_name_to_id(self, table_name: str):
+        if table_name in self.tables:
+            records = self.system_tables.scan_all_records()
+            records = [x for x in records if x['table_name'] == table_name]
+            return records[0]['table_id']
         
     def _initialise_system_columns_(self):
         system_columns_page = StructuredDataRecordPage(self.page_allocator.get_page(3).data)
@@ -110,20 +134,26 @@ class TableManager:
         system_tables_sys_columns_records = [
             {
                 'table_id': 1,
+                'column_id': 1,
                 'column_name': 'table_id',
                 'data_type': DataType.INTEGER,
+                'data_length': 30,
                 'ordinal_position': 1
             },
             {
                 'table_id': 1,
+                'column_id': 2,
                 'column_name': 'table_name',
                 'data_type': DataType.STRING,
+                'data_length': 30,
                 'ordinal_position': 2
             },
             {
                 'table_id': 1,
+                'column_id': 1,
                 'column_name': 'first_page_id',
                 'data_type': DataType.INTEGER,
+                'data_length': 30,
                 'ordinal_position': 3
             }
         ]
@@ -131,56 +161,145 @@ class TableManager:
         system_columns_sys_columns_records = [
             {
                 'table_id': 2,
+                'column_id': 1,
                 'column_name': 'table_id',
                 'data_type': DataType.INTEGER,
+                'data_length': 30,
                 'ordinal_position': 1
             },
             {
                 'table_id': 2,
+                'column_id': 2,
                 'column_name': 'column_name',
                 'data_type': DataType.STRING,
+                'data_length': 30,
                 'ordinal_position': 2
             },
             {
                 'table_id': 2,
+                'column_id': 3,
                 'column_name': 'data_type',
                 'data_type': DataType.STRING,
+                'data_length': 30,
                 'ordinal_position': 3
             },
             {
                 'table_id': 2,
+                'column_id': 4,
+                'column_name': 'data_length',
+                'data_type': DataType.INTEGER,
+                'data_length': 30,
+                'ordinal_position': 3
+            },
+            {
+                'table_id': 2,
+                'column_id': 5,
                 'column_name': 'ordinal_position',
                 'data_type': DataType.INTEGER,
+                'data_length': 30,
                 'ordinal_position': 4
             }
         ]
 
+        systabs_records = []
+        syscols_records = []
         for i in system_tables_sys_columns_records:
-            system_columns_page.insert_record(
+            b = system_columns_page.insert_record(
                 schema=self._system_columns_schema_,
                 record = i
             )
+            systabs_records.append((1, (3, b)))
+            
+
 
         for i in system_columns_sys_columns_records:
-            system_columns_page.insert_record(
+            a = system_columns_page.insert_record(
                 schema=self._system_columns_schema_,
                 record = i
             )
+            syscols_records.append((2, (3,a)))
             
         self.page_allocator.page_manager.write_page(3, system_columns_page.data)
         self.page_allocator._mark_page_id(3)
     
     def _initialise_metadata_indexes_(self):
+        d_type_class = get_datatype('I')
+        datatype = d_type_class(length=30, signed=False)
+        
+        system_table_index = BTreeIndex(
+            self.page_allocator,
+            datatype=datatype
+        )
         
         system_table_table_id_index = {
             'index_id' : 1,
             'name' : 'pk_system_tables_table_id',
             'table_id' : 1,
             'column_name' : 'table_id',
-            'root_page_id' : 2,
+            'root_page_id' : system_table_index.root_page_id,
             'unique' : True
         }
-        self.system_indexes.insert()
+        self.system_indexes.insert(system_table_table_id_index)
+        
+        system_table_index.insert(1, (2,0)) # SYSTEM TABLE IDX, followed by page ptr, slot ptr
+        system_table_index.insert(2, (2,1)) # SYSTEM COLS IDX, followed by page ptr, slot ptr
+        system_table_index.insert(6, (2,2)) # SYSTEM COLS IDX, followed by page ptr, slot ptr
+        
+        system_columns_index = BTreeIndex(
+            self.page_allocator,
+            datatype=datatype
+        )
+        
+        system_column_table_id_index = {
+            'index_id' : 2,
+            'name' : 'idx_sys_col_table_id',
+            'table_id' : 2,
+            'column_name' : 'table_id',
+            'root_page_id' : system_columns_index.root_page_id,
+            'unique' : True
+        }
+        
+        self.system_indexes.insert(system_column_table_id_index)
+        
+        system_columns_index.insert(1, (3, 0))
+        system_columns_index.insert(1, (3, 1))
+        system_columns_index.insert(1, (3, 2))
+        
+        system_columns_index.insert(2, (3, 3))
+        system_columns_index.insert(2, (3, 4))
+        system_columns_index.insert(2, (3, 5))
+        system_columns_index.insert(2, (3, 6))
+        system_columns_index.insert(2, (3, 7))
+        
+        system_columns_index.insert(6, (3, 8))
+        system_columns_index.insert(6, (3, 9))
+        system_columns_index.insert(6, (3, 10))
+        system_columns_index.insert(6, (3, 11))
+        system_columns_index.insert(6, (3, 12))
+        system_columns_index.insert(6, (3, 13))
+        
+        system_indexes_index = BTreeIndex(
+            self.page_allocator,
+            datatype=datatype
+        )
+        
+        system_indexes_table_id_index = {
+            'index_id' : 3,
+            'name' : 'idx_sys_ind_table_idx',
+            'table_id' : 6,
+            'column_name' : 'table_id',
+            'root_page_id' : system_indexes_index.root_page_id,
+            'unique' : True
+        }
+        self.system_indexes.insert(system_indexes_table_id_index)
+        system_indexes_index.insert(1, (4, 0))
+        system_indexes_index.insert(2, (4, 1))
+        system_indexes_index.insert(6, (4, 2))
+        # think i forgot to notify the index about itself
+        
+        self.system_tables.indexes['table_id'] = system_table_index
+        self.system_columns.indexes['table_id'] = system_columns_index
+        self.system_indexes.indexes['table_id'] = system_indexes_index
         # TODO: PLEASE PLEASE PLEASE INDEX SYSTEM TABLES ON TABLE_ID
         # THEN INDEX SYSTEM_COLUMNS ON TABLE_ID
         # THEN INDEX SYSTEM INDEXES ON TABLE ID
@@ -193,6 +312,7 @@ class TableManager:
         self.load_catalog()
         
         self._initialise_system_indexes_()
+        self._initialise_metadata_indexes_()
         self._initialise_system_sequences_()
         
         self.page_allocator.page_manager.flush()
@@ -224,19 +344,6 @@ class TableManager:
             raise Exception('Table does not exist')
         
         return self.tables[table_name].insert(record)
-        # location_info = self.tables[table_name].insert(record)
-        # tables = self.system_tables.scan_all_records()
-        # table = [x for x in tables if x['table_name'] == table_name][0]
-        # id = table['table_id']
-        
-        # indexes = self.system_indexes.scan_all_records()
-        # relevant_indexes = [x for x in indexes if x['table_id'] == id]
-        
-        # if len(relevant_indexes) > 0:
-            # index = relevant_indexes[0]
-            # 
-            # bti = BTreeIndex(self.page_allocator, root_page_id=index['root_page_id'])
-            # bti.insert(2, location_info)
 
     def get_table(self, name):
         return self.tables.get(name)
@@ -247,12 +354,12 @@ class TableManager:
         schema = Schema([])
         
         for column in relevant_columns:
-            schema.fields.append((column['column_name'], column['data_type']))
+            schema.fields.append((column['column_name'], column['data_type'], column['data_length']))
         return schema
     
     def get_index_by_table_col(self, table_name, column_name):
         if table_name in self.tables:
-            table_records = self.system_tables.scan_all_records()
+            table_records = self.system_tables.scan('table_name', table_name)
             table_record = None
             
             for record in table_records:
@@ -261,8 +368,7 @@ class TableManager:
                     break
                     
             if table_record is not None:
-                records = self.system_indexes.scan_all_records()
-                table_indexes = [x for x in records if x['table_id'] == table_record['table_id']]
+                table_indexes = self.system_indexes.scan('table_id', table_record['table_id'])
                 
                 for i in table_indexes:
                     if i['column_name'] == column_name:
@@ -276,21 +382,20 @@ class TableManager:
         
         return False
     
+    # def new_index(self, index_name, table_name, column_name, unique = False):
+        # existing_index
+    
     def create_index(self, index_name, table_name, column_name, unique = False):
         existing_index = self.get_index_by_table_col(table_name, column_name)
         if existing_index is not None:
             return existing_index
         
-        all_tables = self.system_tables.scan_all_records()
+        table = self.system_tables.scan('table_name', table_name)
         
-        table = None
+        if len(table) == 1:
+            table=table[0] # dirty hack for now
         
-        for n in all_tables:
-            if n['table_name'] == table_name:
-                table = n
-                break
-        
-        indexes = self.system_indexes.scan_all_records()
+        indexes = self.system_indexes.scan('table_id', table['table_id'])
         index_ids = [i['index_id'] for i in indexes] + [-1]
         new_index_id = max(index_ids) + 1
         
@@ -304,10 +409,10 @@ class TableManager:
                 break
         
         if column is not None:
-            bti = BTreeIndex(
-                page_allocator=self.page_allocator,
-                datatype=column['data_type']
-            )
+            d_type_class = get_datatype(column['data_type'])
+            datatype = d_type_class(length=column['data_length'], signed=False)
+            bti = BTreeIndex(self.page_allocator, datatype=datatype)
+            
             eeee = {
                 'index_id': new_index_id,
                 'name': index_name,
@@ -317,18 +422,41 @@ class TableManager:
                 'unique': str(unique)
             }
             self.system_indexes.insert(eeee)
-            
-            return bti
-            
+            self.tables[table_name].indexes[column_name] = bti
             
             
+    def load_indexes(self):
+        all_indexes = self.system_indexes.scan_all_records()
+        
+        for idx in all_indexes:
+            self
             
+    @property
+    def system_tables(self):
+        return self.tables['system_tables']
+    
+    @property
+    def system_columns(self):
+        return self.tables['system_columns']
 
     def load_catalog(self, system_tables_pid = 2, system_columns_pid = 3):
-        self.system_tables = Table(
+        
+        
+        swap_indexes = dict()
+        
+        for tname in self.tables:
+            swap_indexes[tname] = self.tables[tname].indexes
+        
+        if 'system_table' not in self.tables:
+            self.tables['system_tables'] = Table(
             "system_tables", self._system_tables_schema_, system_tables_pid, self.page_allocator
         )
-        self.system_columns = Table(
+        # self.system_tables = Table(
+        #     "system_tables", self._system_tables_schema_, system_tables_pid, self.page_allocator
+        # )
+        
+        if 'system_columns' not in self.tables:
+            self.tables['system_columns'] = Table(
             "system_columns", self._system_columns_schema_, system_columns_pid, self.page_allocator
         )
 
@@ -340,8 +468,13 @@ class TableManager:
             schema = self._load_schema_from_columns_(table_info['table_id'])
             self.tables[tname] = Table(tname, schema, pid, self.page_allocator)
             
+        for tname, indexes in swap_indexes.items():
+            self.tables[tname].indexes = indexes
+            
         if 'system_indexes' in self.tables:
             self.system_indexes = self.tables['system_indexes']
+            self.load_indexes()
             
-        if 'system_sequences' in self.tables:
-            self.system_sequences = self.tables['system_sequences']
+        if INTERNAL_SEQUENCE_TABLE_NAME in self.tables:
+            self.system_sequences = self.tables[INTERNAL_SEQUENCE_TABLE_NAME]
+            self.sequence_manager = SequenceManager(self.system_sequences)

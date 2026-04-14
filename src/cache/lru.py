@@ -1,5 +1,12 @@
 from collections import OrderedDict
 from .base import Cache
+from src.console.logging_config import setup_logging
+import logging
+
+setup_logging()
+
+logger = logging.getLogger('LRU Cache')
+logger.debug('Cache imported')
 
 class LRUCache(Cache):
     def __contains__(self, key):
@@ -13,9 +20,17 @@ class LRUCache(Cache):
     def __setitem__(self, key, value):
         self.put(key, value)
     
-    def __init__(self, capacity: int):
+    def __init__(self, capacity: int, eviction_hook = None):
         self.cache = OrderedDict()
         self.capacity = capacity
+        
+        if eviction_hook is not None:
+            self.eviction_hook = eviction_hook
+        
+        logger.debug('Cache instanciated')
+        
+    def last_key(self):
+        return list(self.cache.keys())[0]
 
     def get(self, key):
         if key not in self.cache:
@@ -33,4 +48,13 @@ class LRUCache(Cache):
 
     def evict(self):
         if len(self.cache) > self.capacity:
-            self.cache.popitem(last=False)
+            logger.debug('Evicting')
+          
+            first_key = self.last_key()
+            
+            if self.eviction_hook is not None:
+                self.eviction_hook(first_key) # Need to work on thisdebu
+            
+            key = self.cache.popitem()
+            logger.debug(f'{key} evicted')
+            

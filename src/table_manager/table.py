@@ -9,6 +9,7 @@ class Table:
         self.schema = schema
         self.first_page_id = first_page_id
         self.page_allocator:PageAllocator = page_allocator
+        self.indexes = dict()
         
     def __repr__(self):
         return f'Table({self.name}, {self.first_page_id}, {self.schema})'
@@ -44,6 +45,10 @@ class Table:
         self.page_allocator.page_manager.write_page(page.id, structured_page.data)
         
         self.page_allocator.page_manager.flush()
+        
+        for column_name in record:
+            if column_name in self.indexes:
+                self.indexes[column_name].insert(record[column_name], (current_page_id, slot_id))
 
         return current_page_id, slot_id
     
@@ -75,7 +80,7 @@ class Table:
         record = {}
         offset = 0
 
-        for name, ftype in self.schema.fields:
+        for name, ftype, length in self.schema.fields:
             match (ftype):
                 case (DataType.INTEGER):
                     if offset + 4 > len(data):
@@ -129,9 +134,6 @@ class Table:
             for slot_num in range(structured_page.num_slots):
                 if structured_page._slot_deleted(slot_num) == False:
                     raw = structured_page.read_slot(slot_num)
-                    
-                    # if raw is None:
-                    #     print()
                         
                     record = self.deserialize(raw)
                 
@@ -190,3 +192,59 @@ class Table:
 
         self.page_allocator.page_manager.write_page(page.id, structured_page.data)
         self.page_allocator.page_manager.flush()
+        
+    def _read_row_by_position(self, page_id, slot_id):
+        page = self.page_allocator.get_page(page_id)
+        structured_page = StructuredDataRecordPage(page.data)
+        records = []
+
+        if structured_page._slot_deleted(slot_id) == False:
+            raw = structured_page.read_slot(slot_id)
+            record = self.deserialize(raw)
+            records.append(record)
+        
+        return records
+    
+    def get_index(self, column_name):
+        if column_name in self.indexes:
+            return self.indexes[column_name]
+        
+        return None
+
+    def index_lookup(self, column_name, value):
+        """
+        Returns all records matching `value` using the index if it exists,
+        otherwise falls back to a full table scan.
+        """
+        index = self.get_index(column_name)
+        
+        if index is not None:
+            locations = index.search(value)  # returns list of (page_id, slot_id)
+            print('index locations')
+            print(locations)
+            return [self._read_row_by_position(*loc) for loc in locations]
+        else:
+            # fallback: full scan
+            return [r for r in self.scan_all_records() if r[column_name] == value]
+        
+    def scan(self, column_name, value):
+        if column_name in self.indexes:
+            print('index_lookup')
+            return self.index_lookup(column_name, value)
+        
+        else:
+            print('full_scan')
+            all_records = self.scan_all_records()
+            records = [x for x in all_records if x[column_name] == value]
+            return records
+        
+    def range_scan(self, column_name, lower_bound, upper_bound):
+        index = self.get_index(column_name)
+        
+        if index is not None:
+            locations = index.range_scan(lower_bound,upper_bound)
+            return [self._read_row_by_position(*loc) for loc in locations]
+        else:
+            return [r for r in self.scan_all_records() if r[column_name] < upper_bound and r[column_name > lower_bound]]
+        
+        

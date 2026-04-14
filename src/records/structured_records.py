@@ -1,11 +1,8 @@
 from .records import DataRecordPage
 from .exceptions import DataRecordSlotDoesNotExistException
 from src.config import ENDIAN_TYPE
+from src.datatypes.classes import DataType
 
-class DataType:
-    STRING = 'string'
-    INTEGER = 'int'
-    BOOLEAN = 'bool'
 
 class Schema:
     def __init__(self, fields: list[tuple[str, str]]):
@@ -17,7 +14,7 @@ class Schema:
 class StructuredDataRecordPage(DataRecordPage):
     def serialize(self, schema: Schema, record: dict) -> bytes:
         data = bytearray()
-        for name, ftype in schema.fields:
+        for name, ftype, length in schema.fields:
             if name not in record:
                 raise ValueError(f"Missing value for field '{name}'")
             value = record[name]
@@ -39,6 +36,9 @@ class StructuredDataRecordPage(DataRecordPage):
                     data += encoded
                 
                 case (DataType.BOOLEAN):
+                    if isinstance(value, bool):
+                        value = str(value)
+                        
                     if not isinstance(value, str):
                         raise TypeError(f"Expected str for field '{name}', got {type(value)}")
                     

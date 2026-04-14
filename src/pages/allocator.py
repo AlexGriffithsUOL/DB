@@ -61,10 +61,6 @@ class PageAllocator:
         version = superblock.data[4:6].decode('utf-8')
         print('PYDB Version: ' + version)
         
-        # bitmap_dir_start_size = 4
-        # bitmap_dir_start_offset = 6
-        # bitmap_dir_start_end = bitmap_dir_start_offset + bitmap_dir_start_size
-        # bitmap_dir_start = int.from_bytes(superblock.data[bitmap_dir_start_offset:bitmap_dir_start_end], ENDIAN_TYPE)
         self.bitmap_start_id = self.INITIAL_RESERVED_BITMAP_PAGE
         
         self.sys_table_pid = int.from_bytes(superblock.data[10:14], ENDIAN_TYPE)

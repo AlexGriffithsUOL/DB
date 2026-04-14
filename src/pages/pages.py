@@ -1,4 +1,5 @@
 from src.files import FileManager
+import math
 from src.config import get_default_config
 from .exceptions import NoPageSizeExcConfigException
 from ..cache.lru import LRUCache
@@ -12,6 +13,18 @@ class Page:
         self.id = id
         self.data = bytearray(data)
         self.dirty = dirty
+        
+    @property
+    def debug_read(self):
+        temp_data = []
+        max_lines = math.ceil(len(self.data) / 10)
+        for i in range(max_lines):
+            if i != max_lines:
+                temp_data.append([str(x) for x in self.data[i*10:(i+1)*10]])
+            else:
+                temp_data.append([str(x) for x in self.data[i*10:]])
+                
+        return temp_data
     
 
 class PageManager:
@@ -27,7 +40,7 @@ class PageManager:
             cache_capacity: int = 100
         ):
         self.file_manager = file_manager
-        self.cache = LRUCache(cache_capacity)
+        self.cache = LRUCache(cache_capacity, self.flush_page)
         self.highest_page_id = 0
         self.free_pages = []
         
@@ -48,6 +61,12 @@ class PageManager:
         
         if page_id > self.highest_page_id:
             self.highest_page_id = page_id
+            
+    def flush_page(self, page_id):
+        page_obj = self.cache[page_id]
+        if page_obj.dirty:
+            self.file_manager.write_page(page_id, page_obj.data)
+            self.file_manager.flush()
         
     def flush(self):
         for page_id in self.cache:

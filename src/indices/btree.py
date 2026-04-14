@@ -1,321 +1,263 @@
+from typing import List, Optional, Literal
+from src.pages.allocator import PageAllocator
+from src.pages import Page
+from src.datatypes.classes import get_datatype, IntegerDataType, DataTypeBaseType
+import math
 import bisect
-import struct
-from src.indices.pointer_block import PointerBlock
-from src.records.structured_records import DataType
 
+global LAST_KNOWN
+LAST_KNOWN = False
 
-PAGE_SIZE = 4096
-MAX_KEYS = 100  # adjust as needed
+def get_LAST_KNOWN():
+    return LAST_KNOWN
 
-class BTreeNode:
-    def __init__(self, page_id, is_leaf, page_allocator, datatype):
-        self.page_id = page_id
-        self.is_leaf = is_leaf
-        self.keys = []      # now list of strings
-        self.pointers = []  # list of RIDs lists for duplicates
-        self.next_leaf = None
-        self.page_allocator = page_allocator
-        self.datatype = datatype
+def SET_LAST_KNOWN(val: bool):
+    globals()['LAST_KNOWN'] = val
 
-    def save(self):
-        data = bytearray(PAGE_SIZE)
-        data[0] = 1 if self.is_leaf else 0
-        struct.pack_into("<H", data, 1, len(self.keys))
-        offset = 3
-
-        for key, ptr in zip(self.keys, self.pointers):
-            # encoded = key.encode('utf-8')
-            # struct.pack_into("<I", data, offset, len(encoded))
-            # offset += 4
-            # data[offset:offset + len(encoded)] = encoded # data[7:14]
-            # offset += len(encoded) # offset += 7
-            
-            if self.datatype == DataType.STRING:
-                encoded = key.encode("utf-8")
-                struct.pack_into("<I", data, offset, len(encoded))
-                offset += 4
-                data[offset:offset + len(encoded)] = encoded
-                offset += len(encoded)
-
-            elif self.datatype == DataType.INTEGER:
-                struct.pack_into("<I", data, offset, 4)   # length
-                offset += 4
-                struct.pack_into("<I", data, offset, key) # value
-                offset += 4
-
-            else:
-                raise TypeError("key must be str or int")
-
-            if self.is_leaf:
-                if isinstance(ptr, list):
-                    # Inline RID list
-                    data[offset] = 0  # type flag
-                    offset += 1
-                    struct.pack_into("<H", data, offset, len(ptr))
-                    offset += 2
-                    for pid, slot in ptr:
-                        struct.pack_into("<HH", data, offset, pid, slot)
-                        offset += 4
-                else:
-                    # PointerBlock reference
-                    data[offset] = 1  # type flag
-                    offset += 1
-                    struct.pack_into("<I", data, offset, ptr)
-                    offset += 4
-            else:
-                # Internal node: child pointers stored separately
-                # nothing here; keys only
-                # it appears we are not saving any pointers which is messing up the loading
-                # Inline RID list
-                data[offset] = 0  # type flag
-                offset += 1
-                struct.pack_into("<H", data, offset, len(self.pointers))
-                offset += 2
-                for child_page in self.pointers:
-                    struct.pack_into("<H", data, offset, child_page)
-                    offset += 4
-                pass
-
-        if self.is_leaf:
-            struct.pack_into("<I", data, offset, self.next_leaf or 0)
-
-        self.page_allocator.page_manager.write_page(self.page_id, data)
-
-
+class Directions:
+    LEFT = 'left'
+    RIGHT = 'right'
+    
     @classmethod
-    def load(cls, page_allocator, page_id, datatype):
-        data = page_allocator.page_manager.get_page(page_id).data
-        is_leaf = bool(data[0])
-        num_keys = struct.unpack_from("<H", data, 1)[0]
-        offset = 3
+    def validate_direction(cls, value):
+        if value not in (cls.LEFT, cls.RIGHT):
+            raise Exception('Invalid direction')
 
+class BTreeNode(Page):
+    IS_LEAF = (0, 1)
+    PREVIOUS_LEAF = (1,5)
+    NEXT_LEAF = (5,9)
+    
+    NUMBER_OF_KEYS = (9, 13)
+    DATA_START_IDX = 13
+
+    PAGE_PTR_SIZE = 8
+    SLOT_PTR_SIZE = 8
+    PAGE_SLOT_PTR_SIZE = PAGE_PTR_SIZE + SLOT_PTR_SIZE
+    
+    @property
+    def _min_data_end_(self):
+        return len(self.data) - 1
+    
+    @property
+    def _max_pointers_(self):
+        return self.MAX_KEYS + 1
+    
+    @property
+    def is_leaf(self):
+        data = self.deserialise_ptr(*self.IS_LEAF)
+        return bool(data)
+    
+    @is_leaf.setter
+    def is_leaf(self, val):
+        if val not in (True, False, 0, 1):
+            raise Exception('WRONG')
+        
+        numeric_repr = int(val)
+        encoded = int.to_bytes(numeric_repr, 1, 'little', signed=False)
+        self.write_data(*self.IS_LEAF, encoded)
+        
+    @property
+    def next_leaf(self):
+        return self.deserialise_ptr(*self.NEXT_LEAF)
+    
+    @next_leaf.setter
+    def next_leaf(self, value):
+        data = self.serialise_ptr(value, 4)
+        self.write_data(*self.NEXT_LEAF, data)
+        
+    @property
+    def previous_leaf(self):
+        return self.deserialise_ptr(*self.PREVIOUS_LEAF)
+    
+    @previous_leaf.setter
+    def previous_leaf(self, value):
+        data = self.serialise_ptr(value, 4)
+        self.write_data(*self.PREVIOUS_LEAF, data)
+        
+    @property
+    def number_of_keys(self):
+        return self.deserialise_ptr(*self.NUMBER_OF_KEYS)
+    
+    @number_of_keys.setter
+    def number_of_keys(self, val):
+        data = self.serialise_ptr(val, 4)
+        self.write_data(*self.NUMBER_OF_KEYS, data)
+        
+    @property
+    def key_size(self):
+        return self.datatype.length
+        
+    @property
+    def key_pointer_block_size(self):
+        size = self.key_size + self.PAGE_PTR_SIZE
+        if self.is_leaf:
+            return size + self.SLOT_PTR_SIZE
+        else:
+            return size
+        
+    @property
+    def MAX_KEYS(self):
+        available_data = 4096 - self.DATA_START_IDX
+        if self.is_leaf:
+            max_keys = available_data // self.key_pointer_block_size
+            return max_keys
+        else:
+            max_keys = (available_data - self.PAGE_PTR_SIZE) // self.key_pointer_block_size
+            return max_keys
+        
+    def serialise_ptr(self, ptr, size):
+        return int.to_bytes(ptr, size, 'little', signed=False)
+    
+    def deserialise_ptr(self, start, end):
+        data = self.data[start:end]
+        return int.from_bytes(data, 'little', signed=False)
+    
+    def serialise_key(self, key):
+        return self.datatype.serialise(key)
+    
+    def deserialise_key(self, start, end):
+        data = self.data[start:end]
+        return self.datatype.deserialise(data)
+    
+    def write_data(self, start, end, data):
+        self.data[start:end] = data
+        
+    def flush(self):
+        self.page_allocator.page_manager.write_page(self.id, self.data)
+        
+    def deserialise(self):
         keys = []
         pointers = []
-
-        if is_leaf:
-            for _ in range(num_keys):
-                # read key
-                if datatype == DataType.INTEGER:
-                    offset += 4
-                    key = struct.unpack_from("<I", data, offset)[0]
-                    offset += 4
-                elif datatype == datatype.STRING:
-                    length = struct.unpack_from("<I", data, offset)[0]
-                    offset += 4
-                    key = data[offset:offset+length].decode('utf-8')
-                    offset += length
-                keys.append(key)
-
-                # read type flag
-                flag = data[offset]
-                offset += 1
-
-                if flag == 0:
-                    # inline RID list
-                    rid_len = struct.unpack_from("<H", data, offset)[0]
-                    offset += 2
-                    rid_list = []
-                    for _ in range(rid_len):
-                        pid, slot = struct.unpack_from("<HH", data, offset)
-                        rid_list.append((pid, slot))
-                        offset += 4
-                    pointers.append(rid_list)
-                else:
-                    # PointerBlock reference
-                    ptr_page = struct.unpack_from("<I", data, offset)[0]
-                    pointers.append(ptr_page)
-                    offset += 4
-        else:
-
-            # read keys
-            offset = 3
-            keys = []
-            for _ in range(num_keys):
-                # length = struct.unpack_from("<I", data, offset)[0]
-                # offset += 4
-                # key = data[offset:offset+length].decode('utf-8')
-                # offset += length
-                if datatype == DataType.INTEGER:
-                    offset += 4
-                    key = struct.unpack_from("<I", data, offset)[0]
-                    offset += 4
-                elif datatype == datatype.STRING:
-                    length = struct.unpack_from("<I", data, offset)[0]
-                    offset += 4
-                    key = data[offset:offset+length].decode('utf-8')
-                    offset += length
-                keys.append(key)
-                
-                offset += 1
-                offset += 2
-                
-                        # internal node: child pointers
-            for _ in range(num_keys + 1):
-                ptr = struct.unpack_from("<H", data, offset)[0]
-                pointers.append(ptr)
-                offset += 4
-
-        next_leaf = None
-        if is_leaf:
-            next_leaf = struct.unpack_from("<I", data, offset)[0] or None
-
-        node = cls(page_id, is_leaf, page_allocator, datatype=datatype)
-        node.keys = keys
-        node.pointers = pointers
-        node.next_leaf = next_leaf
-        return node
-
-
-
-    # -------------------------------
-    # Core Operations
-    # -------------------------------
-    def insert(self, key, rid):
+        
         if self.is_leaf:
-            return self._insert_leaf(key, rid)
+            for i in range(self.number_of_keys):
+                key_start = self.DATA_START_IDX + (i * self.key_pointer_block_size)
+                key_end = key_start + self.key_size
+                page_pointer_start = key_end
+                page_pointer_end = page_pointer_start + self.PAGE_PTR_SIZE
+                slot_pointer_start = page_pointer_end
+                slot_pointer_end = slot_pointer_start + self.SLOT_PTR_SIZE
+                
+                
+                key = self.deserialise_key(key_start, key_end)
+                page_pointer = self.deserialise_ptr(page_pointer_start, page_pointer_end)
+                slot_pointer = self.deserialise_ptr(slot_pointer_start, slot_pointer_end)
+                
+                keys.append(key)
+                pointers.append((page_pointer, slot_pointer))
+        
         else:
-            return self._insert_internal(key, rid)
+            for i in range(self.number_of_keys):
+                page_pointer_start = self.DATA_START_IDX + (i * self.key_pointer_block_size)
+                page_pointer_end = page_pointer_start + self.PAGE_PTR_SIZE
+                key_start = page_pointer_end
+                key_end = key_start + self.key_size
+                
+                pointer = self.deserialise_ptr(page_pointer_start, page_pointer_end)
+                
+                key = self.deserialise_key(key_start, key_end)
+                
+                pointers.append(pointer)
+                keys.append(key)
+                
+                if (i+1) == self.number_of_keys:
+                    page_pointer_start = key_end
+                    page_pointer_end = page_pointer_start + self.key_pointer_block_size
+                    
+                    pointer = self.deserialise_ptr(page_pointer_start, page_pointer_end)
+
+                    pointers.append(pointer)
+                    
+        self.keys = keys
+        self.pointers = pointers
+        
+    def set_data(self, data):
+        self.data = data
     
-    def _size_of_entry(self, key, rid_list):
-        if self.datatype == DataType.STRING:
-            key_bytes = key.encode('utf-8')
-        elif self.datatype == DataType.INTEGER:
-            key_bytes = struct.pack("<I", key)  # store integer as 4 bytes
-        else:
-            raise TypeError("key must be str or int")
+    def __init__(
+        self,
+        datatype,
+        id,
+        page_allocator,
+        data = None,
+        is_leaf = None
+        ):
+        self.datatype:DataTypeBaseType = datatype
+        self.keys = []
+        self.pointers = []
+        self.id = id
         
-        return 4 + len(key_bytes) + 2 + 4 * len(rid_list)
-    
-    def _append_rid_to_block(self, block_id, rid):
-        block = PointerBlock.load(self.page_allocator, block_id)
-        
-        current_block = block
-        current_block_id = block_id
-        
-        while current_block.overflow_page is not None:
-            current_block_id = current_block.overflow_page
-            current_block = PointerBlock.load(self.page_allocator, current_block.overflow_page)
-        
-        if len(current_block.rids) < PointerBlock.MAX_RIDS:
-            current_block.rids.append(rid)
-            current_block.save(current_block_id)
+        if data is not None:
+            self.data = data
             
-        else:
-            # overflow → create new block
-            new_block_id = self.page_allocator.allocate_page()
+        if data is None:
+            self.data = page_allocator.get_page(self.id).data
             
-            new_block = PointerBlock(
-                overflow_page=None, 
-                rids=[rid],
-                page_allocator=self.page_allocator
-            )
+        if is_leaf is not None:
+            self.is_leaf = is_leaf
+
+        self.page_allocator = page_allocator
+        
+        self.deserialise()
+
+    def save(self):
+        if self.is_leaf:
+            num_key = self.number_of_keys
+            next_leaf = self.next_leaf
+            previous_leaf = self.previous_leaf
+            self.data = self.page_allocator.page_manager.file_manager._get_empty_page_data()
             
-            new_block.save(new_block_id)
-            current_block.overflow_page = new_block_id
-            current_block.save(current_block_id) 
-    
-    def _insert_leaf(self, key, rid):
-        pos = bisect.bisect_left(self.keys, key)
-
-        if pos < len(self.keys) and self.keys[pos] == key:
-            ptr = self.pointers[pos]
-            if isinstance(ptr, int):  # already a PointerBlock page_id
-                self._append_rid_to_block(ptr, rid)
-            else:  # small list of RIDs in-memory
-                ptr.append(rid)
-                # check if it overflows the leaf
-                if self._size_of_entry(key, ptr) + 3 + 4 > PAGE_SIZE // 2:
-                    # move RIDs to PointerBlock
-                    block_page_id = self.page_allocator.allocate_page()
-                    pb = PointerBlock(
-                        overflow_page=None, 
-                        rids=list(ptr),
-                        page_allocator=self.page_allocator
-                    )
-                    pb.save(block_page_id)
-                    self.pointers[pos] = block_page_id
-        else:
-            # new key
-            self.keys.insert(pos, key)
-            self.pointers.insert(pos, [rid])
-
-        # check if node overflows
-        size = 3 + 4
-        for k, ptr in zip(self.keys, self.pointers):
-            if isinstance(ptr, int):
-                size += 4 + len(k.encode('utf-8')) + 4  # key + block ref
-            else:
-                size += self._size_of_entry(k, ptr)
+            self.number_of_keys = num_key
+            self.is_leaf = True
+            self.next_leaf = next_leaf
+            self.previous_leaf = previous_leaf
+            
+            for i in range(self.number_of_keys):
+                key_start = self.DATA_START_IDX + (i * self.key_pointer_block_size)
+                key_end = key_start + self.key_size
+                page_pointer_start = key_end
+                page_pointer_end = page_pointer_start + self.PAGE_PTR_SIZE
+                slot_pointer_start = page_pointer_end
+                slot_pointer_end = slot_pointer_start + self.SLOT_PTR_SIZE
+                
+                key = self.serialise_key(self.keys[i])
+                
+                rid = self.pointers[i]
+                page_ptr = self.serialise_ptr(rid[0], self.PAGE_PTR_SIZE)
+                slot_ptr = self.serialise_ptr(rid[1], self.SLOT_PTR_SIZE)
+                
+                self.write_data(key_start, key_end, key)
+                self.write_data(page_pointer_start, page_pointer_end, page_ptr)
+                self.write_data(slot_pointer_start, slot_pointer_end, slot_ptr)
         
-        if size > (PAGE_SIZE - 800):
-            return self._split_leaf()
         else:
-            self.save()
-            return None, None
+            num_key = self.number_of_keys
+            self.data = self.page_allocator.page_manager.file_manager._get_empty_page_data()
+            self.number_of_keys = num_key
+            self.is_leaf = False
+            for i in range(self.number_of_keys):
+                page_pointer_start = self.DATA_START_IDX + (i * self.key_pointer_block_size)
+                page_pointer_end = page_pointer_start + self.PAGE_PTR_SIZE
+                key_start = page_pointer_end
+                key_end = key_start + self.key_size
+                
+                page_ptr = self.serialise_ptr(self.pointers[i], self.PAGE_PTR_SIZE)
+                key = self.serialise_key(self.keys[i])
 
-
-    
-    def _split_leaf(self):
-        size = 3 + 4  # header + next_leaf
-        split_idx = 0
-
-        for i, (k, rids) in enumerate(zip(self.keys, self.pointers)):
-            if self.datatype == DataType.STRING:
-                key_size = 4 + len(k.encode('utf-8')) + 2 + 4 * len(rids)
-            elif self.datatype == DataType.INTEGER:
-                key_size = 4 + 4 + 2 + 4 * len(rids) 
-            if size + key_size > PAGE_SIZE // 2:
-                # always keep at least one key on left
-                if i == 0:
-                    split_idx = 1
-                break
-            size += key_size
-            split_idx = i + 1
-
-        # sanity check
-        if split_idx == 0:
-            split_idx = 1
-
-        right_keys = self.keys[split_idx:]
-        right_ptrs = self.pointers[split_idx:]
-        left_keys = self.keys[:split_idx]
-        left_ptrs = self.pointers[:split_idx]
-
-        right_page_id = self.page_allocator.allocate_page()
-        right_node = BTreeNode(right_page_id, is_leaf=True, page_allocator=self.page_allocator, datatype=self.datatype)
-        right_node.keys = right_keys
-        right_node.pointers = right_ptrs
-        right_node.next_leaf = self.next_leaf
-
-        self.keys = left_keys
-        self.pointers = left_ptrs
-        self.next_leaf = right_page_id
+                self.write_data(page_pointer_start, page_pointer_end, page_ptr)
+                self.write_data(key_start, key_end, key)
+                
+                if (i+1) == self.number_of_keys:
+                    final_idx = i+1
+                    page_pointer_start = key_end
+                    page_pointer_end = page_pointer_start + self.PAGE_PTR_SIZE
+                    
+                    page_ptr = self.serialise_ptr(self.pointers[final_idx], self.PAGE_PTR_SIZE)
+                    
+                    self.write_data(page_pointer_start, page_pointer_end, page_ptr)
+        self.flush()
         
-        if self.pointers == [7, 1735751535]:
-            print('ee')
-
-        self.save()
-        right_node.save()
-
-        promoted_key = right_keys[0]
-        return promoted_key, right_page_id
-
-    def _insert_internal(self, key, rid):
-        pos = bisect.bisect_left(self.keys, key)
-        child_page = self.pointers[pos]
-
-        child = BTreeNode.load(self.page_allocator, child_page, datatype=self.datatype)
-        split_key, new_child_page = child.insert(key, rid)
-
-        if split_key:
-            self.keys.insert(pos, split_key)
-            self.pointers.insert(pos + 1, new_child_page)
-            if len(self.keys) > MAX_KEYS:
-                return self._split_internal()
-
-        self.save()
-        return None, None
-
     def _split_internal(self):
         mid = len(self.keys) // 2
         promoted_key = self.keys[mid]
@@ -326,39 +268,211 @@ class BTreeNode:
         left_ptrs = self.pointers[:mid + 1]
 
         right_page_id = self.page_allocator.allocate_page()
-        right_node = BTreeNode(right_page_id, is_leaf=False, page_allocator=self.page_allocator, datatype=self.datatype)
+        right_node = BTreeNode(self.datatype, right_page_id, self.page_allocator, is_leaf=False)
         right_node.keys = right_keys
         right_node.pointers = right_ptrs
+        right_node.number_of_keys = len(right_keys)
 
         self.keys = left_keys
         self.pointers = left_ptrs
+        self.number_of_keys = len(left_keys)
 
         self.save()
         right_node.save()
 
         return promoted_key, right_page_id
+        
+    def _split_leaf_(self):
+        split_idx = len(self.keys) // 2
+
+        # sanity check
+        if split_idx == 0:
+            split_idx = 1
+
+        right_keys = self.keys[split_idx:]
+        right_ptrs = self.pointers[split_idx:]
+        left_keys = self.keys[:split_idx]
+        left_ptrs = self.pointers[:split_idx]
+
+        right_page = self.page_allocator.get_page()
+        right_node = BTreeNode(
+            datatype=self.datatype,
+            id=right_page.id,
+            data=right_page.data,
+            page_allocator=self.page_allocator,
+            is_leaf=True
+        )
+        right_node.keys = right_keys
+        right_node.pointers = right_ptrs
+        right_node.number_of_keys = len(right_keys)
+
+        self.keys = left_keys
+        self.pointers = left_ptrs
+        self.number_of_keys = len(left_keys) # oh my god we never ever insert the key?
+        self.next_leaf = right_page.id
+        right_node.previous_leaf = self.id
+
+        self.save()
+        right_node.save()
+
+        promoted_key = right_keys[0]
+        return promoted_key, right_page.id
     
-    def search(self, key):
+    def _insert_leaf_(self,key,rid):
+        position = bisect.bisect_right(self.keys, key)
+        
+        self.number_of_keys += 1
+        self.keys.insert(position, key)
+        self.pointers.insert(position, rid)
+        self.save()
+        
+        if self.number_of_keys >= self.MAX_KEYS:
+            return self._split_leaf_()
+        
+        return None, None
+    
+    def _insert_internal(self, key, rid): ### THIS IS WORKING
+        pos = bisect.bisect_right(self.keys, key)
+        child_page = self.pointers[pos]
+        
+        child = BTreeNode(self.datatype, child_page, self.page_allocator)
+        split_key, new_child_page = child.insert(key, rid)
+
+        if split_key:
+            self.keys.insert(pos, split_key)
+            self.number_of_keys += 1
+            self.pointers.insert(pos + 1, new_child_page)
+            if len(self.keys) > self.MAX_KEYS:
+                return self._split_internal()
+
+        self.save()
+        return None, None
+    
+    def _increment_no_keys(self, amount = 1):
+        self.number_of_keys += amount
+        
+    def _decrement_no_keys(self, amount = 1):
+        self.number_of_keys -= amount
+        
+    def prepend(self, key, pointer):
+        self.keys.insert(0, key)
+        self.pointers.insert(0, pointer)
+        self._increment_no_keys()
+        
+    def append(self, key, pointer):
+        self.keys.append(key)
+        self.pointers.append(pointer)
+        self._increment_no_keys()
+            
+    def insert(self, key, rid):
         if self.is_leaf:
-            for k, block_id in zip(self.keys, self.pointers):
-                if k == key:
-                    # collect all RIDs from pointer blocks
-                    rids = []
-                    current = block_id
-                    while current:
-                        block = PointerBlock.load(self.page_allocator, current)
-                        rids.extend(block.rids) ### Overflow page isn't working ITS NOT WORKING THERE IS NOT 1.8k pages available
-                        current = block.overflow_page
-                    return rids
-            return None
+            return self._insert_leaf_(key, rid)
         else:
-            pos = bisect.bisect_left(self.keys, key)
-            child_page = self.pointers[pos] if pos < len(self.keys) and key < self.keys[pos] else self.pointers[pos + 1]
-            child = BTreeNode.load(self.page_allocator, child_page, datatype=self.datatype)
-            return child.search(key)
-
-
-
+            return self._insert_internal(key, rid)
+        
+    def update_nearest_key(self, key):
+        new_key_idx = bisect.bisect_right(self.keys, key)
+        self.keys[new_key_idx] = key
+        
+        
+    def get_leaf(self, leaf_number):
+        if leaf_number > 3:
+            return BTreeNode(
+                self.datatype, leaf_number, self.page_allocator, is_leaf=True
+            )
+        else:
+            return None
+        
+    def get_child_node(self, page_id):
+        return BTreeNode(
+            self.datatype,
+            page_id,
+            self.page_allocator
+        )
+    
+    def get_next_leaf(self):
+        return self.get_leaf(self.next_leaf)
+        
+    def get_previous_leaf(self):
+        return self.get_leaf(self.previous_leaf)
+    
+    def get_siblings(self):
+        return self.get_previous_leaf(), self.get_next_leaf()
+        
+    def search(self, key, ret_leaf=False, return_stack: List=None):
+        if self.is_leaf:
+            if ret_leaf:
+                if return_stack:
+                    return self, return_stack
+                else:
+                    return self
+            
+            indexes = [i for i, v in enumerate(self.keys) if v == key]
+            
+            results = []
+            
+            for idx in indexes:
+                results.append(self.pointers[idx])
+            
+            return results
+        else:
+            pos = bisect.bisect_right(self.keys, key)
+            
+            if len(self.keys) == 1:
+                if key >= self.keys[0]:
+                    child_page = self.pointers[1]
+                else:
+                    child_page = self.pointers[0]
+            else:
+                child_page = self.pointers[pos]
+            
+            child = BTreeNode(self.datatype, child_page, self.page_allocator)
+            child.parent = self
+            
+            if return_stack is not None:
+                return_stack.append((self, pos))
+                
+            return child.search(key, ret_leaf, return_stack)
+    
+    @property
+    def minimum_keys(self):
+        if self.is_leaf:
+            return math.ceil(self.MAX_KEYS / 2)
+        
+        else:
+            return math.ceil((self.MAX_KEYS + 1) / 2) - 1
+    
+    @property
+    def has_enough_keys(self):
+        return len(self.keys) >= self.minimum_keys
+    
+    @property
+    def can_lend_key(self):
+        return len(self.keys) > self.minimum_keys
+    
+    def debug_print_info(self):
+        print(f'Node [{self.id}], Keys: {self.keys[0]} - {self.keys[-1]}')
+    
+    def pop(self, idx):
+        key = self.keys.pop(idx)
+        rid = self.pointers.pop(idx)
+        self._decrement_no_keys()
+        return key, rid
+    
+    def remove_leaf_key_pointer(self, key):
+        idx = self.keys.index(key)
+        self.pop(idx)
+    
+    def right_pop(self):
+        return self.pop(-1)
+    
+    def left_pop(self):
+        return self.pop(0)
+        
+    def search_with_path(self, key):
+        stack = []
+        leaf_node, stack = self.search(key, ret_leaf=True, return_stack=stack)
+        return leaf_node, stack
         
 class BTreeIndex:
     def __init__(self, page_allocator, root_page_id: int = None, datatype = None):
@@ -372,42 +486,421 @@ class BTreeIndex:
         else:
             self.root_page_id = root_page_id
     
-    def _load_root_(self):
-        root = BTreeNode(self.root_page_id, is_leaf=True, page_allocator=self.page_allocator, datatype=self.datatype)
-        root.load(self.page_allocator, self.root_page_id)
+    def get_root(self):
+        return BTreeNode(
+            self.datatype,
+            self.root_page_id,
+            self.page_allocator
+        )
 
     def _create_root_(self):
-        page_id = self.page_allocator.allocate_page()
-        root = BTreeNode(page_id, is_leaf=True, page_allocator=self.page_allocator, datatype=self.datatype)
+        page = self.page_allocator.get_page()
+        root = BTreeNode(
+            datatype=self.datatype,
+            id=page.id,
+            page_allocator=self.page_allocator,
+            is_leaf=True
+        )
         root.save()
-        return page_id
+        return page.id
 
     def insert(self, key, rid):
-        root = BTreeNode.load(self.page_allocator, self.root_page_id, datatype=self.datatype)
+        root = BTreeNode(
+            self.datatype,
+            self.root_page_id,
+            self.page_allocator
+        )
         split_key, new_page = root.insert(key, rid)
 
         if split_key:
-            new_root_id = self.page_allocator.allocate_page()
-            new_root = BTreeNode(new_root_id, is_leaf=False, page_allocator=self.page_allocator, datatype=self.datatype)
+            print(f'Split key found, page id: {new_page}, key: {split_key}')
+            new_root = self.page_allocator.get_page()
+            new_root = BTreeNode(
+                datatype=self.datatype,
+                page_allocator=self.page_allocator,
+                id=new_root.id,
+                data=new_root.data
+            )
+
             new_root.keys = [split_key]
-            new_root.pointers = [root.page_id, new_page]
+            new_root.pointers = [root.id, new_page]
+            new_root.number_of_keys = 1
             new_root.save()
-            self.root_page_id = new_root_id
-
+            self.root_page_id = new_root.id
+            return self.root_page_id
+        else:
+            return None
+    
     def search(self, key):
-        root = BTreeNode.load(self.page_allocator, self.root_page_id, datatype=self.datatype)
+        root = BTreeNode(self.datatype, self.root_page_id, self.page_allocator)
         return root.search(key)
+    
+    def _find_low_leaf(self, low):
+        root = BTreeNode(
+            self.datatype, self.root_page_id, self.page_allocator
+        )
+        
+        return root.search(low, ret_leaf=True)
+    
+    def range_scan(self, low, high):
+        leaf = self._find_low_leaf(low)
+        results = []
 
-    def full_scan(self):
-        """Iterate over all keys in order."""
-        node = BTreeNode.load(self.page_allocator, self.root_page_id, datatype=self.datatype)
-        while not node.is_leaf:
-            node = BTreeNode.load(self.page_allocator, node.pointers[0], datatype=self.datatype)
+        while leaf:
+            for key, value in zip(leaf.keys, leaf.pointers):
+                if key < low:
+                    continue
+                if key > high:
+                    return results
+                results.append(value)
+            leaf = leaf.get_next_leaf()
+        return results
+    
+    def _merge_leaf_node(self, source_node: BTreeNode, target_node: BTreeNode, direction: Directions):
+        if direction == Directions.RIGHT:
+            
+            end_node = target_node.get_next_leaf()
+            
+            source_node.keys += target_node.keys
+            source_node.pointers += target_node.pointers
+            source_node.number_of_keys = len(source_node.keys)
+            target_node.number_of_keys = 0
+            
+            target_node.is_leaf = False
+            target_node.keys.clear()
+            target_node.pointers.clear()
+            
+            source_node.next_leaf = target_node.next_leaf
+            target_node.next_leaf = 0
+            target_node.previous_leaf = 0
+            
+            if end_node is not None:
+                end_node.previous_leaf = source_node.id
+            
+            source_node.save()
+            target_node.save()
+            
+            if end_node is not None:
+                end_node.save()
+            
+        if direction == Directions.LEFT:
+            
+            end_node = target_node.get_previous_leaf()
+            
+            source_node.keys = target_node.keys + source_node.keys
+            source_node.pointers = target_node.pointers + source_node.pointers
+            source_node.number_of_keys = len(source_node.keys)
+            target_node.number_of_keys = 0
+            
+            target_node.is_leaf = False
+            target_node.keys.clear()
+            target_node.pointers.clear()
+            source_node.previous_leaf = target_node.previous_leaf
+            
+            target_node.next_leaf = 0
+            target_node.previous_leaf = 0
+            
+            if end_node is not None:
+                end_node.next_leaf = source_node.id
+            
+            source_node.save()
+            target_node.save()
+            
+            if end_node is not None:
+                end_node.save()
 
-        while node:
-            for k, rid in zip(node.keys, node.pointers):
-                yield k, rid
-            if node.next_leaf:
-                node = BTreeNode.load(self.page_allocator, node.next_leaf, datatype=self.datatype)
+    def _handle_underflow(self, node, path):
+        """
+        Handle underflow in a B+ Tree node (leaf or internal).print(
+        'node' is the node that may be underflowing.
+        'path' is the list of nodes from root to this node (optional for recursion).
+        """
+        if node.id == self.root_page_id:
+            if len(node.pointers) == 1 and isinstance(node.pointers[0], int):
+                print('found root!')
+                self.root_page_id = node.pointers[0]
+                return
+            
+        # If node has enough keys or is root, nothing to do
+        if node.has_enough_keys or not hasattr(node, 'parent'):
+            return
+
+        parent = node.parent
+        current_idx = parent.pointers.index(node.id)        
+
+        # Identify siblings
+        left_sibling = None
+        left_sibling_id = parent.pointers[current_idx - 1] if current_idx > 0 else None
+        
+        right_sibling = None
+        right_sibling_id = parent.pointers[current_idx + 1] if current_idx < len(parent.pointers) - 1 else None
+            
+        if left_sibling_id is not None:
+            left_sibling = parent.get_child_node(left_sibling_id)
+            
+        if right_sibling_id is not None:
+            right_sibling = parent.get_child_node(right_sibling_id)
+
+        # ---------------- Borrowing ----------------
+        # Borrow from left sibling
+        if left_sibling and left_sibling.can_lend_key:
+            key, value = left_sibling.right_pop()
+            node.pointers.insert(0, value)
+            
+            if current_idx == len(parent.keys):
+                current_idx -= 1
+            elif current_idx > 0:
+                current_idx -= 1
+
+            # Update parent separator key
+            parent_separator = parent.keys[current_idx]
+            node.keys.insert(0, parent_separator)
+            node.number_of_keys += 1
+            leftest_node = node.get_child_node(node.pointers[0])
+            
+            parent.keys[current_idx] = leftest_node.keys[0]
+
+            left_sibling.save()
+            node.save()
+            parent.save()
+            return
+
+        # Borrow from right sibling
+        if right_sibling and right_sibling.can_lend_key:
+            key, value = right_sibling.left_pop()
+            node.pointers.append(value)
+            node.number_of_keys += 1
+            
+            parent_separator = parent.keys[current_idx] # WE NEED TO MAKE THIS BECOME A NEW SEPERATOR IF WE MOVE THIS ACROSS
+            node.keys.append(parent_separator)
+
+            # Update parent separator key
+            parent.keys[current_idx] = key
+
+            right_sibling.save()
+            node.save()
+            parent.save()
+            return
+
+        # Merge with left sibling
+        if left_sibling:
+            self._merge_leaf_node(node, left_sibling, Directions.LEFT)
+    
+            merged_parent: BTreeNode = parent
+            idx = merged_parent.pointers.index(left_sibling_id)
+            pointer_idx = idx
+            
+            if idx == len(merged_parent.pointers):
+                idx -= 1
+            
+            merged_parent.pointers.pop(pointer_idx)
+            key = merged_parent.keys.pop(idx)
+            merged_parent._decrement_no_keys()
+            merged_parent.save()
+            
+            temp_idx1 = bisect.bisect_right(node.keys, key)
+            
+            node.keys.insert(temp_idx1, key)
+            node.number_of_keys += 1
+            node.save()
+                
+            if not merged_parent.has_enough_keys:
+                self._handle_underflow(merged_parent, path)
+            return
+
+        # If no siblings exist (should not happen unless root)
+        if parent is None:
+            return
+
+        # Merge with right sibling
+        if right_sibling:
+            self._merge_leaf_node(node, right_sibling, Directions.RIGHT)
+            
+            merged_parent = parent
+            idx = merged_parent.pointers.index(right_sibling_id)
+            pointer_idx = idx
+            
+            if idx == len(merged_parent.pointers):
+                idx -= 1
             else:
-                break
+                idx -= 1
+                
+            merged_parent.pointers.pop(pointer_idx)
+            key = merged_parent.keys.pop(idx)
+            merged_parent.number_of_keys -= 1
+            merged_parent.save()
+            
+            temp_idx1 = bisect.bisect_right(node.keys, key)
+            
+            node.keys.insert(temp_idx1, key)
+            node.number_of_keys += 1
+            node.save()
+                
+            if not merged_parent.has_enough_keys:
+                self._handle_underflow(merged_parent, path)
+            return
+
+        # If no siblings exist (should not happen unless root)
+        if parent is None:
+            return
+        
+    def borrow(self, node: BTreeNode, sibling: BTreeNode, parent: BTreeNode, direction: Directions):
+        match(direction):
+            case(Directions.LEFT):
+                key, rid = sibling.right_pop()
+                node.prepend(key, rid)
+                
+            case(Directions.RIGHT):
+                key, rid = sibling.left_pop()
+                node.append(key, rid)
+                
+        parent.update_nearest_key(key) # if breaks then please please make the right borrow decrement the index
+        # in the key update by one or smthing
+                
+        sibling.save()
+        node.save()
+        parent.save()
+    
+    def left_borrow(self, node, sibling, parent):
+        print('left borrow')
+        self.borrow(node, sibling, parent, Directions.LEFT)
+        
+    def right_borrow(self, node, sibling, parent):
+        print('right borrow')
+        self.borrow(node, sibling, parent, Directions.RIGHT)
+        
+    def merge(self, node: BTreeNode, sibling: BTreeNode, parent: BTreeNode, path:list, direction: Directions):
+        print('yay merging')
+        if parent:
+            pointer_idx = parent.pointers.index(sibling.id)
+        
+        # match (direction):
+        #     case (Directions.LEFT):
+        #         print('left')
+        #         self._merge_leaf_node(node, sibling, Directions.LEFT)
+                
+        #     case (Directions.RIGHT):
+        #         print('right')
+        #         self._merge_leaf_node(node, sibling, Directions.RIGHT)
+        
+        # if parent:        
+        #     parent.save()
+        
+        
+        
+        # if left_sibling:
+
+        #         if parent:
+        #             pointer_idx = parent.pointers.index(left_sibling.id)
+        #             key_idx = bisect.bisect_left(parent.keys, key)
+                    
+        #             if key_idx > 0:
+        #                 key_idx -= 1
+                        
+        #             parent.keys.pop(key_idx)
+        #             parent.pointers.pop(pointer_idx)
+        #             parent.number_of_keys -= 1
+                    
+        #             if right_sibling:
+        #                 if key_idx == len(parent.keys):
+        #                     key_idx -= 1
+        #                 parent.keys[key_idx] = right_sibling.keys[0]
+                
+        #             parent.save()
+                    
+                
+        #     if right_sibling:
+                
+                
+        #         if parent:
+        #             key_idx = bisect.bisect_right(parent.keys, key)
+        #             pointer_idx = key_idx + 1
+                    
+        #             parent.keys.pop(key_idx)
+        #             parent.pointers.pop(pointer_idx)
+        #             parent.number_of_keys -= 1
+                    
+        #             if left_sibling:
+        #                 parent.keys[key_idx] = left_sibling.keys[-1]
+                        
+        #             parent.save()
+    
+    def delete(self, key):
+        root = self.get_root()
+        parent: BTreeNode
+
+        leaf, path = root.search_with_path(key)
+        
+        parent, child_idx = path.pop() if path else (None, None)
+        
+        leaf.remove_leaf_key_pointer(key)
+        leaf.save()
+        
+        if not leaf.has_enough_keys:
+            left_sibling, right_sibling = leaf.get_siblings()
+            
+            if left_sibling and left_sibling.can_lend_key:
+                self.left_borrow(leaf, left_sibling, parent, path)
+                return self._handle_underflow(parent, path)
+                
+            if right_sibling and right_sibling.can_lend_key:
+                self.right_borrow(leaf, right_sibling, parent, path)
+                return self._handle_underflow(parent, path)
+                
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            if left_sibling:
+                self._merge_leaf_node(leaf, left_sibling, Directions.LEFT)
+
+                if parent:
+                    pointer_idx = parent.pointers.index(left_sibling.id)
+                    key_idx = bisect.bisect_left(parent.keys, key)
+                    
+                    if key_idx > 0:
+                        key_idx -= 1
+                        
+                    parent.keys.pop(key_idx)
+                    parent.pointers.pop(pointer_idx)
+                    parent.number_of_keys -= 1
+                    
+                    if right_sibling:
+                        if key_idx == len(parent.keys):
+                            key_idx -= 1
+                        parent.keys[key_idx] = right_sibling.keys[0]
+                
+                    parent.save()
+                    
+                return self._handle_underflow(parent, path)
+                
+            if right_sibling:
+                self._merge_leaf_node(leaf, right_sibling, Directions.RIGHT)
+                
+                if parent:
+                    key_idx = bisect.bisect_right(parent.keys, key)
+                    pointer_idx = key_idx + 1
+                    
+                    parent.keys.pop(key_idx)
+                    parent.pointers.pop(pointer_idx)
+                    parent.number_of_keys -= 1
+                    
+                    if left_sibling:
+                        parent.keys[key_idx] = left_sibling.keys[-1]
+                        
+                    parent.save()
+                    
+                    
+                return self._handle_underflow(parent, path)
