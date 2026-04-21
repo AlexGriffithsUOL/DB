@@ -8,14 +8,14 @@ NULL_PAGE_ID_VALUE = -1
 
 class DBConfig:
     db_location: str | Path
-    page_size_kb: int = 4096
+    page_size_kb: int = 8192
     auto_create: bool = False
     max_file_open_retries: int = 3
     
     def __init__(
         self, 
         db_location: str | Path = None, 
-        page_size_kb: int | None = 4096,
+        page_size_kb: int = 8192,
         auto_create: bool = False,
         max_file_open_retries: int = 3
         ):

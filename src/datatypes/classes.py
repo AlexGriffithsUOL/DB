@@ -8,7 +8,7 @@ class DataType:
 class DataTypeBaseType:
     reference_char = 'N'
     
-    def __init__(self, length: int):
+    def __init__(self, length: int, *args, **kwargs):
         self.length = length
         
     def encode(self, value):
@@ -19,7 +19,6 @@ class DataTypeBaseType:
     
     def serialise(self, value: str):
         encoded = self.encode(value)
-        # length = len(encoded)
         
         if self.get_length(value) > self.length:
             raise Exception('VALUE TOO BIG')
@@ -39,8 +38,8 @@ class StringDataType(DataTypeBaseType):
     def get_length(self, value):
         return len(value)
     
-    def deserialise(self, values: list):
-        return chr(values)
+    def deserialise(self, values: bytearray):
+        return values.decode('utf-8')
     
 class IntegerDataType(DataTypeBaseType):
     reference_char = 'I'

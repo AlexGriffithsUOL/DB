@@ -1,7 +1,6 @@
 from src.table_manager.manager import TableManager
 from src.records.structured_records import Schema, DataType
 from pathlib import Path
-from src.indices.btree import BTreeNode as btn, BTreeIndex as bert
 
 file_path = Path("/home/alex/Programming/DBMS/pysql.db")
 
@@ -17,32 +16,34 @@ test_table_schema = Schema([
 ])
 
 tm.create_table('test', test_table_schema)
-tm.create_index('idx_test_id', 'test', 'test_id', False)
-tm.tables['system_tables'].range_scan('table_id', 0, 1000)
-tm.tables['system_columns'].scan('table_id', 6)
+# tm.tables['system_tables'].range_scan('table_id', 0, 1000)
+# tm.tables['system_columns'].scan('table_id', 6)
 
-for i in range(1000):
+tm.sequence_manager.create_sequence('test_sequence', 1, 1, 1, 1000, 'False')
+sequence = tm.sequence_manager.generate_sequence_object('test_sequence')
+
+for i in range(3000):
+        
+    fancy_id = sequence.nextval()
     test_record = {
-        'test_id': i,
+        'test_id': fancy_id,
         'name': 'Alex',
-        'ordinal': i
+        'ordinal': fancy_id
     }
 
     tm.insert('test', test_record)
     
-# tm.sequence_manager._override_sequence_start_point('seq_test_sequence', 100)
-tm.sequence_manager.create_sequence('test_sequence', 20, 20, 20, 'False')
-sequence = tm.sequence_manager.generate_sequence_object('test_sequence')
-    
-for i in range(5849):
+tm.create_index('idx_test_id', 'test', 'test_id', False)
+
+for i in range(1, 2000):
     # id = 5999 - i 
-    id = i 
-    if id == 5954:
-        print('for fuck sake')
+    # id = (i+ 1) * 20
+    id = i
+    
     tm.tables['test'].indexes['test_id'].delete(id)
 
-print(tm.tables['test'].scan('test_id', 5999))
-print(tm.tables['test'].scan('test_id', 5900))
-print(tm.tables['test'].scan('test_id', 5850))
+print(tm.tables['test'].scan('test_id', 2500))
 
+
+tm.create_index('idx_system_tables_table_name', 'system_tables', 'table_name', True)
 pass

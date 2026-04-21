@@ -4,9 +4,9 @@ from src.records.structured_records import Schema, StructuredDataRecordPage
 from src.datatypes.classes import DataType, get_datatype
 from src.pages.allocator import PageAllocator
 from src.catalog.header import CatalogHeader
-from src.sequences.classes import INTERNAL_SEQUENCE_TABLE_NAME, SequenceManager
+from src.sequences.classes import INTERNAL_SEQUENCE_TABLE_NAME, SEQUENCE_ID_GENERATION_NAME, SEQUENCE_NAME_GENERATION_NAME, TABLE_ID_SEQUENCE_NAME, SequenceManager
 # from src.indices.classes import BTreeIndex
-from src.indices.btree import BTreeIndex
+from src.indices.btree2 import BTreeIndex
 
 class TableManager:
     @property
@@ -67,8 +67,12 @@ class TableManager:
         return columns
     
     def _get_table_id_counter_(self):
-        self.catalog_header.table_counter += 1
-        return self.catalog_header.table_counter
+        if not hasattr(self, 'sequence_manager'):
+            self.catalog_header.table_counter += 1
+            return self.catalog_header.table_counter
+        else:
+            seq = self.sequence_manager.generate_sequence_object(TABLE_ID_SEQUENCE_NAME)
+            return seq.nextval()
     
     def __init__(self, page_manager = None):
         
@@ -110,9 +114,9 @@ class TableManager:
     def _initialise_system_sequences_(self):
         self.system_sequences = self.create_table(INTERNAL_SEQUENCE_TABLE_NAME, self._system_sequences_schema_)
         
-        initial_sequence = {
+        sequence_id_sequence = {
             'sequence_id': 1,
-            'name': 'seq_system_sequence_id',
+            'name': SEQUENCE_ID_GENERATION_NAME,
             'current_value': 1,
             'increment': 1,
             'min_value': 1,
@@ -120,7 +124,11 @@ class TableManager:
             'cycle': 'False'
         }
         
-        self.system_sequences.insert(initial_sequence)
+        self.system_sequences.insert(sequence_id_sequence)
+        
+        self.sequence_manager = SequenceManager(self.system_sequences)
+        self.sequence_manager.create_sequence(SEQUENCE_NAME_GENERATION_NAME, 3, 1, 1, 1, 'False')
+        self.sequence_manager.create_sequence(TABLE_ID_SEQUENCE_NAME, 6, 1, 1, 1, 'False')
         
     def table_name_to_id(self, table_name: str):
         if table_name in self.tables:
@@ -243,7 +251,7 @@ class TableManager:
         
         system_table_index.insert(1, (2,0)) # SYSTEM TABLE IDX, followed by page ptr, slot ptr
         system_table_index.insert(2, (2,1)) # SYSTEM COLS IDX, followed by page ptr, slot ptr
-        system_table_index.insert(6, (2,2)) # SYSTEM COLS IDX, followed by page ptr, slot ptr
+        system_table_index.insert(6, (2,2)) # SYSTEM INDEX IDX, followed by page ptr, slot ptr
         
         system_columns_index = BTreeIndex(
             self.page_allocator,
@@ -295,14 +303,11 @@ class TableManager:
         system_indexes_index.insert(1, (4, 0))
         system_indexes_index.insert(2, (4, 1))
         system_indexes_index.insert(6, (4, 2))
-        # think i forgot to notify the index about itself
         
         self.system_tables.indexes['table_id'] = system_table_index
         self.system_columns.indexes['table_id'] = system_columns_index
         self.system_indexes.indexes['table_id'] = system_indexes_index
-        # TODO: PLEASE PLEASE PLEASE INDEX SYSTEM TABLES ON TABLE_ID
-        # THEN INDEX SYSTEM_COLUMNS ON TABLE_ID
-        # THEN INDEX SYSTEM INDEXES ON TABLE ID
+        
         pass
             
     def _initialise_system_catalog_(self):
@@ -359,20 +364,15 @@ class TableManager:
     
     def get_index_by_table_col(self, table_name, column_name):
         if table_name in self.tables:
-            table_records = self.system_tables.scan('table_name', table_name)
-            table_record = None
-            
-            for record in table_records:
-                if record['table_name'] == table_name:
-                    table_record = record
-                    break
+            table_record = self.system_tables.scan('table_name', table_name)
                     
             if table_record is not None:
-                table_indexes = self.system_indexes.scan('table_id', table_record['table_id'])
+                table_indexes = self.system_indexes.scan('column_name', column_name)
                 
-                for i in table_indexes:
-                    if i['column_name'] == column_name:
-                        return i
+                if table_indexes == []:
+                    return None
+                
+                return table_indexes
     
     def table_column_has_index(self, table_name, column_name):
         index = self.get_index_by_table_col(table_name, column_name)
@@ -391,11 +391,8 @@ class TableManager:
             return existing_index
         
         table = self.system_tables.scan('table_name', table_name)
-        
-        if len(table) == 1:
-            table=table[0] # dirty hack for now
-        
         indexes = self.system_indexes.scan('table_id', table['table_id'])
+        
         index_ids = [i['index_id'] for i in indexes] + [-1]
         new_index_id = max(index_ids) + 1
         
@@ -411,7 +408,7 @@ class TableManager:
         if column is not None:
             d_type_class = get_datatype(column['data_type'])
             datatype = d_type_class(length=column['data_length'], signed=False)
-            bti = BTreeIndex(self.page_allocator, datatype=datatype)
+            bti = BTreeIndex(self.page_allocator, datatype=datatype) ## this seems to fuck up page 92
             
             eeee = {
                 'index_id': new_index_id,
@@ -421,6 +418,13 @@ class TableManager:
                 'root_page_id': bti.root_page_id,
                 'unique': str(unique)
             }
+            
+            all_records, all_rids = self.tables[table_name].scan_all_records(include_rids=True)
+            filtered_records = [x[column_name] for x in all_records]
+            
+            for (record, rid) in zip(filtered_records, all_rids): # somewhere in here it condenses down the array so it fails the page size check
+                bti.insert(record, rid)
+                
             self.system_indexes.insert(eeee)
             self.tables[table_name].indexes[column_name] = bti
             
@@ -451,9 +455,6 @@ class TableManager:
             self.tables['system_tables'] = Table(
             "system_tables", self._system_tables_schema_, system_tables_pid, self.page_allocator
         )
-        # self.system_tables = Table(
-        #     "system_tables", self._system_tables_schema_, system_tables_pid, self.page_allocator
-        # )
         
         if 'system_columns' not in self.tables:
             self.tables['system_columns'] = Table(

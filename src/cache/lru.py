@@ -53,7 +53,7 @@ class LRUCache(Cache):
             first_key = self.last_key()
             
             if self.eviction_hook is not None:
-                self.eviction_hook(first_key) # Need to work on thisdebu
+                self.eviction_hook(first_key)
             
             key = self.cache.popitem()
             logger.debug(f'{key} evicted')

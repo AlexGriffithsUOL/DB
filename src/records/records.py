@@ -23,7 +23,7 @@ class DataRecordPage:
     
     SLOT_SIZE_BYTES = 4
     
-    def __init__(self, data, file_length=4096):
+    def __init__(self, data, file_length=8192):
         self.data = data
         self.file_length = file_length
         
@@ -254,7 +254,7 @@ class DataRecordPage:
     def compact(self):
         useful_data =  [x for x in self.slots if x.length > -1]
         
-        offset_marker = 4096
+        offset_marker = self.file_length
         for i, piece in enumerate(useful_data):
             data = self.read_slot(i)
             offset_marker -= piece.length

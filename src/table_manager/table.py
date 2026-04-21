@@ -52,26 +52,50 @@ class Table:
 
         return current_page_id, slot_id
     
-    def scan_all_records(self):
-        page = self.page_allocator.get_page(self.first_page_id)
-        structured_page = StructuredDataRecordPage(page.data)
+    def _read_all_slots(self, structured_page: StructuredDataRecordPage, include_rids = False):
         records = []
-        
-        while structured_page.next_page_id != -1:
-            for slot_num in range(structured_page.num_slots):
-                if structured_page._slot_deleted(slot_num) == False:
-                    raw = structured_page.read_slot(slot_num)
-                    record = self.deserialize(raw)
-                    records.append(record)
-            page = self.page_allocator.get_page(structured_page.next_page_id)
-            structured_page = StructuredDataRecordPage(page.data)
-        
+        rids = []
         for slot_num in range(structured_page.num_slots):
             if structured_page._slot_deleted(slot_num) == False:
                 raw = structured_page.read_slot(slot_num)
                 record = self.deserialize(raw)
                 records.append(record)
+            
+            if include_rids:
+                rids.append((structured_page.page_id, slot_num))
+        
+        if include_rids:
+            return records, rids        
+        
+        return records, None
+    
+    def scan_all_records(self, include_rids=False):
+        page = self.page_allocator.get_page(self.first_page_id)
+        structured_page = StructuredDataRecordPage(page.data)
+        structured_page.page_id = self.first_page_id
+        records = []
+        rids = []
+        
+        while structured_page.next_page_id != -1:
+            new_records, new_rids = self._read_all_slots(structured_page, include_rids)
+            records += new_records
+            
+            if new_rids is not None:
+                rids += new_rids
+            
+            page = self.page_allocator.get_page(structured_page.next_page_id)
+            structured_page = StructuredDataRecordPage(page.data)
+            structured_page.page_id = page.id
+        
+        new_records, new_rids = self._read_all_slots(structured_page, include_rids)
+        records += new_records
+        
+        if new_rids is not None:
+            rids += new_rids
 
+        if include_rids:
+            return records, rids
+        
         return records
 
 
@@ -170,6 +194,17 @@ class Table:
                     record = self.deserialize(raw)
                 
                     if predicate(record):
+                        
+                        for value in new_values:
+                            if value in self.indexes:
+                                rid = (page.id, slot_num)
+                                old_value = record[value]
+                                new_value = new_values[value]
+                                
+                                self.indexes[value].delete(old_value, rid) # maintain the fcking index
+                                self.indexes[value].insert(new_value, rid)
+                        
+                        
                         record.update(new_values)
                         serialized = structured_page.serialize(self.schema, record)
                         structured_page.update_slot(slot_num, serialized)
@@ -187,6 +222,11 @@ class Table:
                 
                 if predicate(record):
                     record.update(new_values)
+                    
+                    for key, value in new_values.items():
+                        if key in self.indexes:
+                            self.indexes[key].update(value)
+                        
                     serialized = structured_page.serialize(self.schema, record)
                     structured_page.update_slot(slot_num, serialized)
 
@@ -202,6 +242,9 @@ class Table:
             raw = structured_page.read_slot(slot_id)
             record = self.deserialize(raw)
             records.append(record)
+            
+        if len(records) == 1:
+            return records[0]
         
         return records
     
@@ -219,9 +262,7 @@ class Table:
         index = self.get_index(column_name)
         
         if index is not None:
-            locations = index.search(value)  # returns list of (page_id, slot_id)
-            print('index locations')
-            print(locations)
+            locations = index.search(value) 
             return [self._read_row_by_position(*loc) for loc in locations]
         else:
             # fallback: full scan
@@ -229,13 +270,15 @@ class Table:
         
     def scan(self, column_name, value):
         if column_name in self.indexes:
-            print('index_lookup')
             return self.index_lookup(column_name, value)
         
         else:
-            print('full_scan')
             all_records = self.scan_all_records()
             records = [x for x in all_records if x[column_name] == value]
+            
+            if len(records) == 1:
+                return records[0]
+            
             return records
         
     def range_scan(self, column_name, lower_bound, upper_bound):

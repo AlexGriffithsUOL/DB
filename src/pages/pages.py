@@ -36,7 +36,7 @@ class PageManager:
     
     def __init__(
             self, 
-            file_manager: FileManager = FileManager(get_default_config()),
+            file_manager: FileManager = FileManager(),
             cache_capacity: int = 100
         ):
         self.file_manager = file_manager
@@ -58,6 +58,9 @@ class PageManager:
         page.data = data
         page.dirty = True
         self.cache[page_id] = page
+        
+        if 92 in self.cache:
+            print('huh')
         
         if page_id > self.highest_page_id:
             self.highest_page_id = page_id
