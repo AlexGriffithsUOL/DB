@@ -4,6 +4,7 @@ INTERNAL_SEQUENCE_TABLE_NAME = 'system_sequences'
 SEQUENCE_ID_GENERATION_NAME = 'sys_S1'
 SEQUENCE_NAME_GENERATION_NAME = 'sys_S2'
 TABLE_ID_SEQUENCE_NAME = 'sys_S3'
+INDEX_ID_SEQUENCE_NAME = 'sys_S4'
 
 class Sequence:
     def __init__(

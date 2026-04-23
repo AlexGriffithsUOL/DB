@@ -16,8 +16,6 @@ test_table_schema = Schema([
 ])
 
 tm.create_table('test', test_table_schema)
-# tm.tables['system_tables'].range_scan('table_id', 0, 1000)
-# tm.tables['system_columns'].scan('table_id', 6)
 
 tm.sequence_manager.create_sequence('test_sequence', 1, 1, 1, 1000, 'False')
 sequence = tm.sequence_manager.generate_sequence_object('test_sequence')
@@ -41,8 +39,6 @@ for i in range(1, 2000):
     id = i
     
     tm.tables['test'].indexes['test_id'].delete(id)
-
-print(tm.tables['test'].scan('test_id', 2500))
 
 
 tm.create_index('idx_system_tables_table_name', 'system_tables', 'table_name', True)

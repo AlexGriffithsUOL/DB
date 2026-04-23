@@ -59,9 +59,6 @@ class PageManager:
         page.dirty = True
         self.cache[page_id] = page
         
-        if 92 in self.cache:
-            print('huh')
-        
         if page_id > self.highest_page_id:
             self.highest_page_id = page_id
             

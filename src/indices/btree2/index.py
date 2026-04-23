@@ -1,10 +1,8 @@
-from typing import List
-from src.pages import Page
-from src.datatypes.classes import DataTypeBaseType
-import math
 import bisect
-from .nodes import BTreeNode
+from .string_nodes import BTreeNode
+from .nodes import BTreeNode as NumericNode
 from .utils import Directions
+from src.datatypes.classes import StringDataType, IntegerDataType
         
 class BTreeIndex:
     def __init__(self, page_allocator, root_page_id: int = None, datatype = None):
@@ -12,6 +10,11 @@ class BTreeIndex:
         
         if datatype is not None:
             self.datatype = datatype
+            
+        if isinstance(self.datatype, StringDataType):
+            self.node_class = BTreeNode
+        else:
+            self.node_class = NumericNode
         
         if root_page_id is None:
             self.root_page_id = self._create_root_()
@@ -19,7 +22,7 @@ class BTreeIndex:
             self.root_page_id = root_page_id
     
     def get_root(self):
-        return BTreeNode(
+        return self.node_class(
             self.datatype,
             self.root_page_id,
             self.page_allocator
@@ -27,7 +30,7 @@ class BTreeIndex:
 
     def _create_root_(self):
         page = self.page_allocator.get_page()
-        root = BTreeNode(
+        root = self.node_class(
             datatype=self.datatype,
             id=page.id,
             page_allocator=self.page_allocator,
@@ -37,7 +40,7 @@ class BTreeIndex:
         return page.id
 
     def insert(self, key, rid):
-        root = BTreeNode(
+        root = self.node_class(
             self.datatype,
             self.root_page_id,
             self.page_allocator
@@ -47,7 +50,7 @@ class BTreeIndex:
         if split_key:
             print(f'Split key found, page id: {new_page}, key: {split_key}')
             new_root = self.page_allocator.get_page()
-            new_root = BTreeNode(
+            new_root = self.node_class(
                 datatype=self.datatype,
                 page_allocator=self.page_allocator,
                 id=new_root.id,
@@ -64,11 +67,11 @@ class BTreeIndex:
             return None
     
     def search(self, key):
-        root = BTreeNode(self.datatype, self.root_page_id, self.page_allocator)
+        root = self.node_class(self.datatype, self.root_page_id, self.page_allocator)
         return root.search(key)
     
     def _find_low_leaf(self, low):
-        root = BTreeNode(
+        root = self.node_class(
             self.datatype, self.root_page_id, self.page_allocator
         )
         

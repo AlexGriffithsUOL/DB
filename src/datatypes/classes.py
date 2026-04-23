@@ -33,7 +33,8 @@ class StringDataType(DataTypeBaseType):
     encoding = 'utf-8'
     
     def encode(self, value):
-        return value.encode(self.encoding)
+        length_bytes = int.to_bytes(len(value), length=2, byteorder='little', signed=False)
+        return length_bytes + value.encode(self.encoding)
     
     def get_length(self, value):
         return len(value)

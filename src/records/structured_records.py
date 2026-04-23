@@ -10,6 +10,12 @@ class Schema:
 
     def get_field_names(self):
         return [name for name, _ in self.fields]
+    
+    def dictify(self, data):
+        return {
+            x: None for x in self.get_field_names()
+        }
+
 
 class StructuredDataRecordPage(DataRecordPage):
     def serialize(self, schema: Schema, record: dict) -> bytes:

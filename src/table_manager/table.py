@@ -268,7 +268,7 @@ class Table:
             # fallback: full scan
             return [r for r in self.scan_all_records() if r[column_name] == value]
         
-    def scan(self, column_name, value):
+    def old_scan(self, column_name, value):
         if column_name in self.indexes:
             return self.index_lookup(column_name, value)
         
@@ -280,6 +280,19 @@ class Table:
                 return records[0]
             
             return records
+        
+    def scan(self, predicates):
+        # if column_name in self.indexes:
+        #     return self.index_lookup(column_name, value)
+        
+        # else:
+        all_records = self.scan_all_records()
+        records = [x for x in all_records if predicates(x)]
+        
+        if len(records) == 1:
+            return records[0]
+        
+        return records
         
     def range_scan(self, column_name, lower_bound, upper_bound):
         index = self.get_index(column_name)
