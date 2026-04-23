@@ -25,6 +25,7 @@ class TableManager:
             columns.append(
                 {
                     'table_id': table_id,
+                    'column_id': i+1,
                     'column_name': field_data[0],
                     'table_name': table_name,
                     'data_type': field_data[1],
@@ -85,7 +86,7 @@ class TableManager:
         
         self.sequence_manager = SequenceManager(self.system_sequences)
         self.sequence_manager.create_sequence(SEQUENCE_NAME_GENERATION_NAME, 3, 1, 1, 1, 'False')
-        self.sequence_manager.create_sequence(TABLE_ID_SEQUENCE_NAME, 6, 1, 1, 1, 'False')
+        self.sequence_manager.create_sequence(TABLE_ID_SEQUENCE_NAME, 9, 1, 1, 1, 'False')
         self.sequence_manager.create_sequence(INDEX_ID_SEQUENCE_NAME, 4, 1, 1, 10, 'False')
         
     def _initialise_system_columns_(self):
@@ -240,8 +241,7 @@ class TableManager:
         return self.tables.get(name)
     
     def _load_schema_from_columns_(self, table_id):
-        all_columns = self.system_columns.scan_all_records()
-        relevant_columns = [x for x in all_columns if x['table_id'] == table_id]
+        relevant_columns = self.system_columns.scan(lambda x: x['table_id'] == table_id)
         schema = Schema([])
         
         for column in relevant_columns:
@@ -268,49 +268,66 @@ class TableManager:
         # existing_index
     
     def create_index(self, index_name, table_name, column_name, unique = False):
-        existing_index = self.get_index_by_table_col(table_name, column_name)
-        if existing_index is not None:
+        existing_index = self.system_indexes.scan(lambda x: x['table_name'] == table_name and x['column_name'] == column_name)
+        
+        if len(existing_index) > 0:
             return existing_index
         
+        # table = self.system_tables.scan(lambda x: x['table_name'] == table_name)
+        # indexes = self.system_indexes.scan(lambda x: x['table_id'] == table['table_id'])
+        
+        # index_ids = [i['index_id'] for i in indexes] + [-1]
+        # new_index_id = max(index_ids) + 1
+        
+        if hasattr(self, 'seqeuence_manager'):
+            index_id_sequence = self.sequence_manager.generate_sequence_object(INDEX_ID_SEQUENCE_NAME)
+            index_id = index_id_sequence.nextval()
+        else:
+            indexes = self.system_indexes.scan(lambda x: x['table_name'] == table_name)
+            
+            if isinstance(indexes, dict):
+                new_index_id = indexes['index_id'] + 1
+            elif isinstance(indexes, list):    
+                index_ids = [i['index_id'] for i in indexes] + [-1]
+                new_index_id = max(index_ids) + 1
+        
+        # column_records = self.system_columns.scan_all_records()
+        
+        # column = None
+        
+        # for o in column_records:
+        #     if o['column_name'] == column_name and o['table_id'] == table['table_id']:
+        #         column = o
+        #         break
+
+        column = self.system_columns.scan(lambda x: x['table_name'] == table_name and x['column_name'] == column_name)
         table = self.system_tables.scan(lambda x: x['table_name'] == table_name)
-        indexes = self.system_indexes.scan(lambda x: x['table_id'] == table['table_id'])
         
-        index_ids = [i['index_id'] for i in indexes] + [-1]
-        new_index_id = max(index_ids) + 1
+        if len(column) == 0 or len(table) == 0:
+            raise Exception('No column / table found')
         
-        column_records = self.system_columns.scan_all_records()
+        d_type_class = get_datatype(column['data_type'])
+        datatype = d_type_class(length=column['data_length'], signed=False)
+        bti = BTreeIndex(self.page_allocator, datatype=datatype)
         
-        column = None
+        eeee = {
+            'index_id': new_index_id,
+            'name': index_name,
+            'table_id': table['table_id'],
+            'table_name': table_name,
+            'column_name': column_name,
+            'root_page_id': bti.root_page_id,
+            'unique': str(unique)
+        }
         
-        for o in column_records:
-            if o['column_name'] == column_name and o['table_id'] == table['table_id']:
-                column = o
-                break
+        all_records, all_rids = self.tables[table_name].scan_all_records(include_rids=True)
+        filtered_records = [x[column_name] for x in all_records]
+        
+        for (record, rid) in zip(filtered_records, all_rids):
+            bti.insert(record, rid)
             
-        # column = self.
-        
-        if column is not None:
-            d_type_class = get_datatype(column['data_type'])
-            datatype = d_type_class(length=column['data_length'], signed=False)
-            bti = BTreeIndex(self.page_allocator, datatype=datatype)
-            
-            eeee = {
-                'index_id': new_index_id,
-                'name': index_name,
-                'table_id': table['table_id'],
-                'column_name': column_name,
-                'root_page_id': bti.root_page_id,
-                'unique': str(unique)
-            }
-            
-            all_records, all_rids = self.tables[table_name].scan_all_records(include_rids=True)
-            filtered_records = [x[column_name] for x in all_records]
-            
-            for (record, rid) in zip(filtered_records, all_rids): # somewhere in here it condenses down the array so it fails the page size check
-                bti.insert(record, rid)
-                
-            self.system_indexes.insert(eeee)
-            self.tables[table_name].indexes[column_name] = bti
+        self.system_indexes.insert(eeee)
+        self.tables[table_name].indexes[column_name] = bti
             
             
     def load_indexes(self):

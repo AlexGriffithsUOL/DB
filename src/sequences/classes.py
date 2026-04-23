@@ -52,7 +52,7 @@ class SequenceManager:
         self._table = table
         
     def get_sequence(self, sequence_name: str):
-        sequence = self._table.scan('name', sequence_name)
+        sequence = self._table.scan(lambda x: x['name'] == sequence_name)
         return sequence
     
     def _get_sequence_id(self):

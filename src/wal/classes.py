@@ -13,5 +13,3 @@ class WriteAheadLogger:
             
     def write(operation, page, value, a):
         print('wwoenrownrownorno')
-            
-        

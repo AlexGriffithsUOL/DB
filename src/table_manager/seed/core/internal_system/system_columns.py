@@ -23,7 +23,7 @@ class SystemColumnsSeedData(BaseSeedData):
         },
         {
             'table_id': 1,
-            'column_id': 1,
+            'column_id': 3,
             'table_name': 'system_tables',
             'column_name': 'first_page_id',
             'data_type': DataType.INTEGER,
@@ -45,6 +45,24 @@ class SystemColumnsSeedData(BaseSeedData):
         {
             'table_id': 2,
             'column_id': 2,
+            'table_name': 'system_columns',
+            'column_name': 'column_id',
+            'data_type': DataType.INTEGER,
+            'data_length': 30,
+            'ordinal_position': 1
+        },
+        {
+            'table_id': 2,
+            'column_id': 3,
+            'table_name': 'system_columns',
+            'column_name': 'table_name',
+            'data_type': DataType.STRING,
+            'data_length': 30,
+            'ordinal_position': 2
+        },
+        {
+            'table_id': 2,
+            'column_id': 4,
             'table_name': 'system_columns',
             'column_name': 'column_name',
             'data_type': DataType.STRING,

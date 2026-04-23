@@ -9,6 +9,7 @@ SYSTEM_TABLES_SCHEMA = Schema([
 
 SYSTEM_COLUMNS_SCHEMA = Schema([
     ('table_id', DataType.INTEGER, 30),
+    ('column_id', DataType.INTEGER, 30),
     ('table_name', DataType.STRING, 30),
     ('column_name', DataType.STRING, 30),
     ('data_type', DataType.STRING, 30),
