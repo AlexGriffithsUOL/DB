@@ -18,5 +18,4 @@ class TransactionManager:
         status = TransactionStatus.ACTIVE.value
         self.add_to_transactions(new_transaction_id, status)
         
-        
     pass
