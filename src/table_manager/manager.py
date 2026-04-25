@@ -15,11 +15,13 @@ from src.table_manager.schemas.core.internal_system import (
     SYSTEM_SEQUENCES_SCHEMA
 )
 from src.table_manager.seed.core.internal_system.system_sequences import SystemSequencesSeedData
+from src.transactions.utils import BOOTSTRAP_TX_ID
+from src.transactions.manager import TransactionManager
 
 class TableManager:
-    def _schema_to_sys_cols_(self, schema, table_id):
+    def _schema_to_sys_cols_(self, schema, table_id, tx_snapshot):
         columns = []
-        table_name = self.system_tables.scan(lambda x: x['table_id'] == table_id)['table_name']
+        table_name = self.system_tables.scan(lambda x: x['table_id'] == table_id, tx_snapshot)['table_name']
         
         for i, field_data in enumerate(schema.fields):
             columns.append(
@@ -36,20 +38,27 @@ class TableManager:
             
         return columns
     
-    def _get_table_id_counter_(self):
+    def _get_table_id_counter_(self, tx_snapshot = None):
         if not hasattr(self, 'sequence_manager'):
             self.catalog_header.table_counter += 1
             return self.catalog_header.table_counter
         else:
-            seq = self.sequence_manager.generate_sequence_object(TABLE_ID_SEQUENCE_NAME)
+            if tx_snapshot is None:
+                raise Exception('UHUH NO WAY')
+            seq = self.sequence_manager.get_sequence(TABLE_ID_SEQUENCE_NAME, tx_snapshot)
             return seq.nextval()
     
-    def __init__(self, page_manager = None):
+    def __init__(self, page_manager = None, transaction_manager: TransactionManager = None):
         
         if page_manager is None:
             page_manager = PageAllocator()
+            
+        if transaction_manager is None:
+            from src.transactions.manager import get_transaction_manager
+            transaction_manager = get_transaction_manager()
 
         self.page_allocator: PageAllocator = page_manager
+        self.transaction_manager = transaction_manager
         self.tables = {}
         self.catalog_header = CatalogHeader(self.page_allocator)
         
@@ -65,29 +74,60 @@ class TableManager:
         
         system_tables_page.insert_record(
             schema = SYSTEM_TABLES_SCHEMA,
-            record = SystemTablesSeedData.SYSTEM_TABLES_SYSTEM_TABLES_RECORD
+            record = SystemTablesSeedData.SYSTEM_TABLES_SYSTEM_TABLES_RECORD,
+            tx_id = BOOTSTRAP_TX_ID
         ) # insert tables record to table page (self-reference / bootstrap)
         
         system_tables_page.insert_record(
             schema = SYSTEM_TABLES_SCHEMA,
-            record = SystemTablesSeedData.SYSTEM_TABLES_SYSTEM_COLUMNS_RECORD
+            record = SystemTablesSeedData.SYSTEM_TABLES_SYSTEM_COLUMNS_RECORD,
+            tx_id = BOOTSTRAP_TX_ID
         ) # same w columns
         
         self.page_allocator.page_manager.write_page(2, system_tables_page.data) # force write as we're still booting up
         self.page_allocator._mark_page_id(2)
         
     def _initialise_system_indexes_(self):
-        self.system_indexes = self.create_table('system_indexes', SYSTEM_INDEXES_SCHEMA) # Background works mostly there for the catalog
+        self.system_indexes = self.create_table(
+            'system_indexes',
+            SYSTEM_INDEXES_SCHEMA
+        ) # Background works mostly there for the catalog
     
     def _initialise_system_sequences_(self):
-        self.system_sequences = self.create_table(INTERNAL_SEQUENCE_TABLE_NAME, SYSTEM_SEQUENCES_SCHEMA)
+        self.system_sequences = self.create_table(
+            INTERNAL_SEQUENCE_TABLE_NAME,
+            SYSTEM_SEQUENCES_SCHEMA
+        )
         
-        self.system_sequences.insert(SystemSequencesSeedData.SYSTEM_SEQUENCES_SYSTEM_SEQUENCES_RECORD)
-        
+        self.system_sequences.insert(SystemSequencesSeedData.SYSTEM_SEQUENCES_SYSTEM_SEQUENCES_RECORD, BOOTSTRAP_TX_ID)
         self.sequence_manager = SequenceManager(self.system_sequences)
-        self.sequence_manager.create_sequence(SEQUENCE_NAME_GENERATION_NAME, 3, 1, 1, 1, 'False')
-        self.sequence_manager.create_sequence(TABLE_ID_SEQUENCE_NAME, 9, 1, 1, 1, 'False')
-        self.sequence_manager.create_sequence(INDEX_ID_SEQUENCE_NAME, 4, 1, 1, 10, 'False')
+        
+        self.sequence_manager.create_sequence(
+            SEQUENCE_NAME_GENERATION_NAME,
+            3,
+            1,
+            1,
+            1,
+            'False'
+        )
+        
+        self.sequence_manager.create_sequence(
+            TABLE_ID_SEQUENCE_NAME,
+            9,
+            1,
+            1,
+            1,
+            'False'
+        )
+        
+        self.sequence_manager.create_sequence(
+            INDEX_ID_SEQUENCE_NAME,
+            4,
+            1,
+            1,
+            10,
+            'False'
+        )
         
     def _initialise_system_columns_(self):
         system_columns_page = StructuredDataRecordPage(self.page_allocator.get_page(3).data)
@@ -98,14 +138,16 @@ class TableManager:
         for rec in SystemColumnsSeedData.SYSTEM_COLUMNS_SYSTEM_TABLES_RECORD:
             slot = system_columns_page.insert_record(
                 schema = SYSTEM_COLUMNS_SCHEMA,
-                record = rec
+                record = rec,
+                tx_id = BOOTSTRAP_TX_ID
             )
             systabs_records.append((1, (3, slot)))
 
         for rec in SystemColumnsSeedData.SYSTEM_COLUMNS_SYSTEM_COLUMNS_RECORD:
             slot = system_columns_page.insert_record(
                 schema = SYSTEM_COLUMNS_SCHEMA,
-                record = rec
+                record = rec,
+                tx_id = BOOTSTRAP_TX_ID
             )
             syscols_records.append((2, (3, slot)))
             
@@ -130,7 +172,7 @@ class TableManager:
             'root_page_id' : system_table_index.root_page_id,
             'unique' : True
         }
-        self.system_indexes.insert(system_table_table_id_index)
+        self.system_indexes.insert(system_table_table_id_index, BOOTSTRAP_TX_ID)
         
         system_table_index.insert(1, (2,0)) # SYSTEM TABLE IDX, followed by page ptr, slot ptr
         system_table_index.insert(2, (2,1)) # SYSTEM COLS IDX, followed by page ptr, slot ptr
@@ -151,7 +193,7 @@ class TableManager:
             'unique' : True
         }
         
-        self.system_indexes.insert(system_column_table_id_index)
+        self.system_indexes.insert(system_column_table_id_index, BOOTSTRAP_TX_ID)
         
         system_columns_index.insert(1, (3, 0))
         system_columns_index.insert(1, (3, 1))
@@ -184,7 +226,7 @@ class TableManager:
             'root_page_id' : system_indexes_index.root_page_id,
             'unique' : True
         }
-        self.system_indexes.insert(system_indexes_table_id_index)
+        self.system_indexes.insert(system_indexes_table_id_index, BOOTSTRAP_TX_ID)
         system_indexes_index.insert(1, (4, 0))
         system_indexes_index.insert(2, (4, 1))
         system_indexes_index.insert(6, (4, 2))
@@ -193,7 +235,12 @@ class TableManager:
         self.system_columns.indexes['table_id'] = system_columns_index
         self.system_indexes.indexes['table_id'] = system_indexes_index
         
-        self.create_index('idx_system_tables_name', 'system_tables', 'table_name', unique = True)
+        self.create_index(
+            'idx_system_tables_name',
+            'system_tables',
+            'table_name',
+            unique = True
+        )
         
         pass
             
@@ -213,35 +260,43 @@ class TableManager:
     
     
 
-    def create_table(self, name, schema=None):
+    def create_table(self, name, schema):
         if name in self.tables:
             return self.tables[name]
         
+        tx1 = self.transaction_manager.get_new_transaction()
+        
         page_id = self.page_allocator.allocate_page()
+        
         table = Table(name, schema, page_id, self.page_allocator)
         self.tables[name] = table
-        table_id = self._get_table_id_counter_()
-        record = {'table_id': table_id, 'table_name': name, 'first_page_id': page_id}
-        self.system_tables.insert(record)
         
-        table_sys_columns = self._schema_to_sys_cols_(schema, table_id)
+        table_id = self._get_table_id_counter_(tx1.start_snapshot)
+        record = {'table_id': table_id, 'table_name': name, 'first_page_id': page_id}
+        
+        self.system_tables.insert(record, tx1.id)
+        tx1.commit()
+        
+        tx2 = self.transaction_manager.get_new_transaction()
+        table_sys_columns = self._schema_to_sys_cols_(schema, table_id, tx2.start_snapshot)
         
         for column in table_sys_columns:
-            self.system_columns.insert(column)
+            self.system_columns.insert(column, tx2.id)
         
+        tx2.commit()
         return table
     
-    def insert(self, table_name: str, record: dict):
+    def insert(self, table_name: str, record: dict, tx_id):
         if table_name not in self.tables:
             raise Exception('Table does not exist')
         
-        return self.tables[table_name].insert(record)
+        return self.tables[table_name].insert(record, tx_id)
 
     def get_table(self, name):
         return self.tables.get(name)
     
-    def _load_schema_from_columns_(self, table_id):
-        relevant_columns = self.system_columns.scan(lambda x: x['table_id'] == table_id)
+    def _load_schema_from_columns_(self, table_id, tx_snapshot):
+        relevant_columns = self.system_columns.scan(lambda x: x['table_id'] == table_id, tx_snapshot)
         schema = Schema([])
         
         for column in relevant_columns:
@@ -268,40 +323,27 @@ class TableManager:
         # existing_index
     
     def create_index(self, index_name, table_name, column_name, unique = False):
-        existing_index = self.system_indexes.scan(lambda x: x['table_name'] == table_name and x['column_name'] == column_name)
         
+        tx = self.transaction_manager.get_new_transaction()
+        
+        existing_index = self.system_indexes.scan(lambda x: x['table_name'] == table_name and x['column_name'] == column_name, tx.start_snapshot)
         if len(existing_index) > 0:
             return existing_index
         
-        # table = self.system_tables.scan(lambda x: x['table_name'] == table_name)
-        # indexes = self.system_indexes.scan(lambda x: x['table_id'] == table['table_id'])
-        
-        # index_ids = [i['index_id'] for i in indexes] + [-1]
-        # new_index_id = max(index_ids) + 1
-        
-        if hasattr(self, 'seqeuence_manager'):
-            index_id_sequence = self.sequence_manager.generate_sequence_object(INDEX_ID_SEQUENCE_NAME)
+        if hasattr(self, 'sequence_manager'):
+            index_id_sequence = self.sequence_manager.get_sequence(INDEX_ID_SEQUENCE_NAME, tx.start_snapshot)
             index_id = index_id_sequence.nextval()
         else:
-            indexes = self.system_indexes.scan(lambda x: x['table_name'] == table_name)
+            indexes = self.system_indexes.scan(lambda x: x['table_name'] == table_name, tx.start_snapshot)
             
             if isinstance(indexes, dict):
-                new_index_id = indexes['index_id'] + 1
+                index_id = indexes['index_id'] + 1
             elif isinstance(indexes, list):    
                 index_ids = [i['index_id'] for i in indexes] + [-1]
-                new_index_id = max(index_ids) + 1
-        
-        # column_records = self.system_columns.scan_all_records()
-        
-        # column = None
-        
-        # for o in column_records:
-        #     if o['column_name'] == column_name and o['table_id'] == table['table_id']:
-        #         column = o
-        #         break
+                index_id = max(index_ids) + 1
 
-        column = self.system_columns.scan(lambda x: x['table_name'] == table_name and x['column_name'] == column_name)
-        table = self.system_tables.scan(lambda x: x['table_name'] == table_name)
+        column = self.system_columns.scan(lambda x: x['table_name'] == table_name and x['column_name'] == column_name, tx.start_snapshot)
+        table = self.system_tables.scan(lambda x: x['table_name'] == table_name, tx.start_snapshot)
         
         if len(column) == 0 or len(table) == 0:
             raise Exception('No column / table found')
@@ -310,8 +352,8 @@ class TableManager:
         datatype = d_type_class(length=column['data_length'], signed=False)
         bti = BTreeIndex(self.page_allocator, datatype=datatype)
         
-        eeee = {
-            'index_id': new_index_id,
+        new_index_table_record = {
+            'index_id': index_id,
             'name': index_name,
             'table_id': table['table_id'],
             'table_name': table_name,
@@ -320,14 +362,16 @@ class TableManager:
             'unique': str(unique)
         }
         
-        all_records, all_rids = self.tables[table_name].scan_all_records(include_rids=True)
+        all_records, all_rids = self.tables[table_name].scan_all_records(include_rids=True, tx_snapshot = tx.start_snapshot)
         filtered_records = [x[column_name] for x in all_records]
         
         for (record, rid) in zip(filtered_records, all_rids):
             bti.insert(record, rid)
             
-        self.system_indexes.insert(eeee)
+        self.system_indexes.insert(new_index_table_record, tx.id)
         self.tables[table_name].indexes[column_name] = bti
+        
+        tx.commit()
             
             
     def load_indexes(self):
@@ -364,10 +408,12 @@ class TableManager:
 
         all_tables = self.system_tables.scan_all_records()
         
+        catalog_load_tx = self.transaction_manager.get_new_transaction()
+        
         for table_info in all_tables:
             tname = table_info['table_name']
             pid = table_info['first_page_id']
-            schema = self._load_schema_from_columns_(table_info['table_id'])
+            schema = self._load_schema_from_columns_(table_info['table_id'], catalog_load_tx.start_snapshot)
             self.tables[tname] = Table(tname, schema, pid, self.page_allocator)
             
         for tname, indexes in swap_indexes.items():
@@ -380,3 +426,5 @@ class TableManager:
         if INTERNAL_SEQUENCE_TABLE_NAME in self.tables:
             self.system_sequences = self.tables[INTERNAL_SEQUENCE_TABLE_NAME]
             self.sequence_manager = SequenceManager(self.system_sequences)
+            
+        catalog_load_tx.commit()

@@ -7,3 +7,4 @@ __pycache__
 *.pg
 plan.txt
 spec
+$sequences/

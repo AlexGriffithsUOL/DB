@@ -1,13 +1,21 @@
 from src.table_manager.manager import TableManager
 from src.records.structured_records import Schema, DataType
 from pathlib import Path
+from src.transactions.manager import get_transaction_manager
+import shutil
+
 
 file_path = Path("/home/alex/Programming/DBMS/pysql.db")
+sequence_dir_path = Path("/home/alex/Programming/DBMS/internal/")
 
 if file_path.exists():
     file_path.unlink()
+    
+if sequence_dir_path.exists():
+    shutil.rmtree(sequence_dir_path)
 
-tm = TableManager()
+tx_m = get_transaction_manager()
+tm = TableManager(transaction_manager=tx_m)
 
 test_table_schema = Schema([
     ('test_id', DataType.INTEGER, 30),
@@ -15,10 +23,12 @@ test_table_schema = Schema([
     ('ordinal', DataType.INTEGER, 30)
 ])
 
-tm.create_table('test', test_table_schema)
+tm.create_table('test', test_table_schema)#, tx.id, tx.start_snapshot) ## need to add tx_id, and tx_snapshot
 
 tm.sequence_manager.create_sequence('test_sequence', 1, 1, 1, 1000, 'False')
-sequence = tm.sequence_manager.generate_sequence_object('test_sequence')
+
+tx = tx_m.get_new_transaction()
+sequence = tm.sequence_manager.get_sequence('test_sequence', tx.start_snapshot)
 
 for i in range(3000):
         
@@ -29,16 +39,26 @@ for i in range(3000):
         'ordinal': fancy_id
     }
 
-    tm.insert('test', test_record)
+    tm.insert('test', test_record, tx.id)
     
+tx.commit()
+
 tm.create_index('idx_test_id', 'test', 'test_id', False)
 
-for i in range(1, 2000):
-    # id = 5999 - i 
-    # id = (i+ 1) * 20
-    id = i
+tx2 = tx_m.get_new_transaction()
+tm.tables['test'].update(lambda x: x['test_id'] == 1000, {'ordinal': 9999}, tx2.id) ## need to hook this up to the indexing
+tx2.commit()
+
+tx4 = tx_m.get_new_transaction()
+records2 = tm.tables['test'].scan(lambda x: x['test_id'] == 1000, tx4.start_snapshot, index_column = 'test_id', index_value = 1000)
+tx4.commit()    
+
+# for i in range(1, 2000):
+#     # id = 5999 - i 
+#     # id = (i+ 1) * 20
+#     id = i
     
-    tm.tables['test'].indexes['test_id'].delete(id)
+#     tm.tables['test'].indexes['test_id'].delete(id)
 
 
 tm.create_index('idx_system_tables_table_name', 'system_tables', 'table_name', True)

@@ -18,8 +18,10 @@ class Schema:
 
 
 class StructuredDataRecordPage(DataRecordPage):
-    def serialize(self, schema: Schema, record: dict) -> bytes:
+    def serialize(self, schema: Schema, record: dict, tx_created: int, tx_deleted: int = 0) -> bytes:
         data = bytearray()
+        data += tx_created.to_bytes(8, byteorder=ENDIAN_TYPE, signed=False)
+        data += tx_deleted.to_bytes(8, byteorder=ENDIAN_TYPE, signed=False)
         for name, ftype, length in schema.fields:
             if name not in record:
                 raise ValueError(f"Missing value for field '{name}'")
@@ -67,6 +69,13 @@ class StructuredDataRecordPage(DataRecordPage):
         """Convert bytes back into a Python dict according to the schema."""
         record = {}
         offset = 0
+        
+        tx_created = int.from_bytes(data[offset:offset+8], byteorder=ENDIAN_TYPE)
+        offset += 8
+        tx_deleted = int.from_bytes(data[offset:offset+8], byteorder=ENDIAN_TYPE)
+        offset += 8
+        record["_tx_created"] = tx_created
+        record["_tx_deleted"] = tx_deleted
 
         for name, ftype in schema.fields:
             match (ftype):
@@ -93,11 +102,15 @@ class StructuredDataRecordPage(DataRecordPage):
             
         return record
     
-    def insert_record(self, schema: Schema, record: dict) -> int:
+    # def insert_record(self, schema: Schema, record: dict) -> int:
+    def insert_record(self, schema: Schema, record: dict, tx_id: int) -> int:
         """Insert a structured record into the page."""
-        serialized = self.serialize(schema, record)
+        serialized = self.serialize(schema, record, tx_created=tx_id)
         slot_id = self.insert(serialized)
         return slot_id
+        # serialized = self.serialize(schema, record)
+        # slot_id = self.insert(serialized)
+        # return slot_id
 
     def read_record(self, schema: Schema, slot_number: int) -> dict:
         """Read a structured record by slot ID."""

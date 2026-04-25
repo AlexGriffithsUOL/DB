@@ -8,7 +8,7 @@ class SystemSequencesSeedData(BaseSeedData):
     SYSTEM_SEQUENCES_SYSTEM_SEQUENCES_RECORD = {
         'sequence_id': 1,
         'name': SEQUENCE_ID_GENERATION_NAME,
-        'current_value': 1,
+        'start_value': 1,
         'increment': 1,
         'min_value': 1,
         'cache': 1,
@@ -18,7 +18,7 @@ class SystemSequencesSeedData(BaseSeedData):
     SYSTEM_SEQUENCES_INDEX_ID_RECORD = {
         'sequence_id': 2,
         'name': INDEX_ID_SEQUENCE_NAME,
-        'current_value': 4,
+        'start_value': 4,
         'increment': 1,
         'min_value': 1,
         'cache': 10,

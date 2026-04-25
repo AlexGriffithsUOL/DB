@@ -30,7 +30,7 @@ SYSTEM_INDEXES_SCHEMA = Schema([
 SYSTEM_SEQUENCES_SCHEMA = Schema([
     ('sequence_id', DataType.INTEGER, 30),
     ('name', DataType.STRING, 30),
-    ('current_value', DataType.INTEGER, 30),
+    ('start_value', DataType.INTEGER, 30),
     ('increment', DataType.INTEGER, 30),
     ('min_value', DataType.INTEGER, 30),
     ('cache', DataType.INTEGER, 30),
