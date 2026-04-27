@@ -8,3 +8,4 @@ __pycache__
 plan.txt
 spec
 $sequences/
+internal/
