@@ -1,5 +1,6 @@
 from src.pages.allocator import PageAllocator
 from src.config import ENDIAN_TYPE
+from .exceptions import CatalogHeaderInvalidDBFileException
 
 class CatalogHeader:
     def __init__(self, page_allocator: PageAllocator = None):
@@ -13,7 +14,7 @@ class CatalogHeader:
     
     def init(self):
         if self.database_version != 'PYDB':
-            raise Exception("Invalid database file")
+            raise CatalogHeaderInvalidDBFileException
         
         print('PYDB Version: ' + self.database_version)
         

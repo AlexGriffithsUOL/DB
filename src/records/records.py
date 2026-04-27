@@ -163,15 +163,23 @@ class DataRecordPage:
         slot_length = self.data[(end - 2): end]
         return slot_offset, slot_length
     
-    def delete_slot(self, slot_number):
+    def _update_slot_deletion(self, slot_number, deleted: bool, length = None):
+        value = -1 if deleted else length
+        
         if self._slot_exists(slot_number) and not self._slot_deleted(slot_number):
             slot_dir_start, slot_dir_end = self._slot_start_and_end(slot_number)
             freed_space = int.from_bytes(self.data[slot_dir_start+2:slot_dir_end], ENDIAN_TYPE, signed=True)
             self.free_space_size += freed_space
-            self.data[slot_dir_start+2 : slot_dir_end] = int.to_bytes(-1, 2, ENDIAN_TYPE, signed=True)
+            self.data[slot_dir_start+2 : slot_dir_end] = int.to_bytes(value, 2, ENDIAN_TYPE, signed=True)
             
         else:
             raise DataRecordSlotDoesNotExistException(slot_number)
+    
+    def delete_slot(self, slot_number):
+        self._update_slot_deletion(slot_number, True)
+        
+    def undelete_slot(self, slot_number, length):
+        self._update_slot_deletion(slot_number, False, length)
         
     def _slot_exists(self, slot_number):
         return (slot_number < self.num_slots and slot_number >= 0)
@@ -189,17 +197,23 @@ class DataRecordPage:
             return slot_number
     
     def _safe_write_to_slot(self, slot_number, offset, length):
-        if not self._slot_deleted(slot_number):
-            return self._raw_write_to_slot(slot_number, offset, length)
+        # if not self._slot_deleted(slot_number):
+        return self._raw_write_to_slot(slot_number, offset, length)
         
     def _can_fit(self, data_length):
         return self.free_space_size >= data_length
     
-    def update_slot(self, slot_number, data):
-        if self._slot_exists(slot_number) and not self._slot_deleted(slot_number):
+    def update_slot(self, slot_number, data, undelete = False):
+        if self._slot_exists(slot_number):# and not self._slot_deleted(slot_number):
             slot: SlotHelper = self.slots[slot_number]
-            old_length = slot.length
+            
             new_length = len(data)
+            
+            if undelete:
+                old_length = new_length
+            else:
+                old_length = slot.length
+                
             if new_length <= old_length:
                 start = slot.offset
                 self.data[start : start + new_length] = data
@@ -209,6 +223,7 @@ class DataRecordPage:
 
                 slot.length = new_length
                 self._safe_write_to_slot(slot_number, slot.offset, slot.length)
+                self.undelete_slot(slot_number, new_length)
 
             else:
                 if not self._can_fit(new_length):
@@ -235,7 +250,8 @@ class DataRecordPage:
         self.num_slots += 1
         
     def read_slot(self, slot_number):
-        if not self._slot_deleted(slot_number) and self._slot_exists(slot_number):
+        # if not self._slot_deleted(slot_number) and self._slot_exists(slot_number):
+        if self._slot_exists(slot_number):
             slot = self.slots[slot_number]
             return self.data[slot.offset:slot.offset + slot.length]
     

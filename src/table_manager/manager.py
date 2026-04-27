@@ -15,8 +15,8 @@ from src.table_manager.schemas.core.internal_system import (
     SYSTEM_SEQUENCES_SCHEMA
 )
 from src.table_manager.seed.core.internal_system.system_sequences import SystemSequencesSeedData
-from src.transactions.utils import BOOTSTRAP_TX_ID
-from src.transactions.manager import TransactionManager
+# from src.transactions.utils import BOOTSTRAP_TX_ID
+from src.transactions.manager import TransactionManager, Transaction
 
 class TableManager:
     def _schema_to_sys_cols_(self, schema, table_id, tx_snapshot):
@@ -59,15 +59,19 @@ class TableManager:
 
         self.page_allocator: PageAllocator = page_manager
         self.transaction_manager = transaction_manager
-        self.tables = {}
+        self.tables: dict[Table] = {}
         self.catalog_header = CatalogHeader(self.page_allocator)
+        self.bootstrap_tx = self.transaction_manager.get_new_transaction()
         
         self._table_id_counter_ = self.catalog_header.table_counter
         
         if self.page_allocator.fresh_superblock:
             self._initialise_system_catalog_()
             
+        self.bootstrap_tx.commit()
+            
         self.load_catalog()
+        
             
     def _initialise_system_tables_(self):
         system_tables_page = StructuredDataRecordPage(self.page_allocator.get_page(2).data) # initial page
@@ -75,13 +79,13 @@ class TableManager:
         system_tables_page.insert_record(
             schema = SYSTEM_TABLES_SCHEMA,
             record = SystemTablesSeedData.SYSTEM_TABLES_SYSTEM_TABLES_RECORD,
-            tx_id = BOOTSTRAP_TX_ID
+            tx = self.bootstrap_tx
         ) # insert tables record to table page (self-reference / bootstrap)
         
         system_tables_page.insert_record(
             schema = SYSTEM_TABLES_SCHEMA,
             record = SystemTablesSeedData.SYSTEM_TABLES_SYSTEM_COLUMNS_RECORD,
-            tx_id = BOOTSTRAP_TX_ID
+            tx = self.bootstrap_tx
         ) # same w columns
         
         self.page_allocator.page_manager.write_page(2, system_tables_page.data) # force write as we're still booting up
@@ -99,7 +103,7 @@ class TableManager:
             SYSTEM_SEQUENCES_SCHEMA
         )
         
-        self.system_sequences.insert(SystemSequencesSeedData.SYSTEM_SEQUENCES_SYSTEM_SEQUENCES_RECORD, BOOTSTRAP_TX_ID)
+        self.system_sequences.insert(SystemSequencesSeedData.SYSTEM_SEQUENCES_SYSTEM_SEQUENCES_RECORD, self.bootstrap_tx)
         self.sequence_manager = SequenceManager(self.system_sequences)
         
         self.sequence_manager.create_sequence(
@@ -139,7 +143,7 @@ class TableManager:
             slot = system_columns_page.insert_record(
                 schema = SYSTEM_COLUMNS_SCHEMA,
                 record = rec,
-                tx_id = BOOTSTRAP_TX_ID
+                tx = self.bootstrap_tx
             )
             systabs_records.append((1, (3, slot)))
 
@@ -147,7 +151,7 @@ class TableManager:
             slot = system_columns_page.insert_record(
                 schema = SYSTEM_COLUMNS_SCHEMA,
                 record = rec,
-                tx_id = BOOTSTRAP_TX_ID
+                tx = self.bootstrap_tx
             )
             syscols_records.append((2, (3, slot)))
             
@@ -172,7 +176,7 @@ class TableManager:
             'root_page_id' : system_table_index.root_page_id,
             'unique' : True
         }
-        self.system_indexes.insert(system_table_table_id_index, BOOTSTRAP_TX_ID)
+        self.system_indexes.insert(system_table_table_id_index, tx = self.bootstrap_tx)
         
         system_table_index.insert(1, (2,0)) # SYSTEM TABLE IDX, followed by page ptr, slot ptr
         system_table_index.insert(2, (2,1)) # SYSTEM COLS IDX, followed by page ptr, slot ptr
@@ -193,7 +197,7 @@ class TableManager:
             'unique' : True
         }
         
-        self.system_indexes.insert(system_column_table_id_index, BOOTSTRAP_TX_ID)
+        self.system_indexes.insert(system_column_table_id_index, tx = self.bootstrap_tx)
         
         system_columns_index.insert(1, (3, 0))
         system_columns_index.insert(1, (3, 1))
@@ -226,7 +230,7 @@ class TableManager:
             'root_page_id' : system_indexes_index.root_page_id,
             'unique' : True
         }
-        self.system_indexes.insert(system_indexes_table_id_index, BOOTSTRAP_TX_ID)
+        self.system_indexes.insert(system_indexes_table_id_index, tx = self.bootstrap_tx)
         system_indexes_index.insert(1, (4, 0))
         system_indexes_index.insert(2, (4, 1))
         system_indexes_index.insert(6, (4, 2))
@@ -274,23 +278,23 @@ class TableManager:
         table_id = self._get_table_id_counter_(tx1.start_snapshot)
         record = {'table_id': table_id, 'table_name': name, 'first_page_id': page_id}
         
-        self.system_tables.insert(record, tx1.id)
+        self.system_tables.insert(record, tx1)
         tx1.commit()
         
         tx2 = self.transaction_manager.get_new_transaction()
         table_sys_columns = self._schema_to_sys_cols_(schema, table_id, tx2.start_snapshot)
         
         for column in table_sys_columns:
-            self.system_columns.insert(column, tx2.id)
+            self.system_columns.insert(column, tx2)
         
         tx2.commit()
         return table
     
-    def insert(self, table_name: str, record: dict, tx_id):
+    def insert(self, table_name: str, record: dict, tx: Transaction):
         if table_name not in self.tables:
             raise Exception('Table does not exist')
         
-        return self.tables[table_name].insert(record, tx_id)
+        return self.tables[table_name].insert(record, tx)
 
     def get_table(self, name):
         return self.tables.get(name)
@@ -368,7 +372,7 @@ class TableManager:
         for (record, rid) in zip(filtered_records, all_rids):
             bti.insert(record, rid)
             
-        self.system_indexes.insert(new_index_table_record, tx.id)
+        self.system_indexes.insert(new_index_table_record, tx)
         self.tables[table_name].indexes[column_name] = bti
         
         tx.commit()

@@ -2,6 +2,8 @@ from src.records.exceptions import DataRecordNotEnoughFreeSpaceException
 from src.records.structured_records import StructuredDataRecordPage, DataType
 from src.config import ENDIAN_TYPE
 from src.pages.allocator import PageAllocator
+from src.transactions.manager import Transaction
+from src.transactions.actions import TXAction, TXActionType
 
 class Table:
     def __init__(self, name, schema, first_page_id, page_allocator):
@@ -14,19 +16,26 @@ class Table:
     def __repr__(self):
         return f'Table({self.name}, {self.first_page_id}, {self.schema})'
     
-    def _filter_by_tx_snapshot(self, records, tx_snapshot=None):
-        final_records = []
-        for record in records:
+    def _filter_by_tx_snapshot(self, records, tx_snapshot=None, locations=None):
+        filtered_records = []
+        filtered_locations = []
+        for i, record in enumerate(records):
             if tx_snapshot is None:
                 # no filtering
-                final_records.append(record)
+                filtered_records.append(record)
             else:
-                if record["_tx_created"] <= tx_snapshot and (record["_tx_deleted"] == 0 or record["_tx_deleted"] > tx_snapshot):
-                    final_records.append(record)
+                if record["i$tx_created"] <= tx_snapshot and (record["i$tx_deleted"] == 0 or record["i$tx_deleted"] > tx_snapshot):
+                    filtered_records.append(record)
                     
-        return final_records
+                    if locations is not None:
+                        filtered_locations.append(locations[i])
+        
+        if locations is not None:
+            return filtered_records, filtered_locations
+
+        return filtered_records
     
-    def insert(self, record: dict, tx_id):
+    def insert(self, record: dict, tx: Transaction, deferred_index: bool = True):
         page = self.page_allocator.get_page(self.first_page_id)
         structured_page = StructuredDataRecordPage(page.data)
         
@@ -39,11 +48,11 @@ class Table:
 
         try:
             if current_page_id == -1: current_page_id = page.id
-            slot_id = structured_page.insert_record(self.schema, record, tx_id)
+            slot_id = structured_page.insert_record(self.schema, record, tx)
             
         except DataRecordNotEnoughFreeSpaceException:
             try:
-                slot_id = structured_page.insert_record(self.schema, record, tx_id)
+                slot_id = structured_page.insert_record(self.schema, record, tx)
                 
             except DataRecordNotEnoughFreeSpaceException:
                 new_page = self.page_allocator.get_page()
@@ -51,16 +60,37 @@ class Table:
                 current_page_id = new_page.id
 
                 new_structured_page = StructuredDataRecordPage(new_page.data)
-                slot_id = new_structured_page.insert_record(self.schema, record, tx_id)
+                slot_id = new_structured_page.insert_record(self.schema, record, tx)
                 self.page_allocator.page_manager.write_page(new_page.id, new_structured_page.data)
                 
         self.page_allocator.page_manager.write_page(page.id, structured_page.data)
         
-        self.page_allocator.page_manager.flush()
+        rid = (current_page_id, slot_id)
+        
+        ta = TXAction(TXActionType.INSERT, self, rid)
+        tx.add_to_timeline(ta)
         
         for column_name in record:
             if column_name in self.indexes:
-                self.indexes[column_name].insert(record[column_name], (current_page_id, slot_id))
+                index = self.indexes[column_name]
+                key = record[column_name]
+                
+                if not deferred_index:
+                    index.insert(key, rid)
+                
+                if deferred_index:
+                    tai = TXAction(
+                        TXActionType.INDEX_INSERT,
+                        self,
+                        rid,
+                        None,
+                        None,
+                        index,
+                        key
+                    )
+                    tx.add_to_timeline(tai)
+                
+        self.page_allocator.page_manager.flush()
 
         return current_page_id, slot_id
     
@@ -70,7 +100,7 @@ class Table:
         for slot_num in range(structured_page.num_slots):
             if structured_page._slot_deleted(slot_num) == False:
                 raw = structured_page.read_slot(slot_num)
-                record = self.deserialize(raw)
+                record = self.deserialise(raw)
                 records.append(record)
             
             if include_rids:
@@ -113,7 +143,7 @@ class Table:
         return final_records
 
 
-    def deserialize(self, data):
+    def deserialise(self, data):
         """Convert bytes back into a Python dict according to the schema."""
         record = {}
         offset = 0
@@ -121,8 +151,8 @@ class Table:
         offset += 8
         tx_deleted = int.from_bytes(data[offset:offset+8], byteorder=ENDIAN_TYPE)
         offset += 8
-        record["_tx_created"] = tx_created
-        record["_tx_deleted"] = tx_deleted
+        record["i$tx_created"] = tx_created
+        record["i$tx_deleted"] = tx_deleted
 
         for name, ftype, length in self.schema.fields:
             match (ftype):
@@ -169,128 +199,153 @@ class Table:
                     raise ValueError(f"Unsupported data type: {ftype}")
             
         return record
-
-    def delete(self, predicate, tx_id):
-        page = self.page_allocator.get_page(self.first_page_id)
+    
+    def delete_by_location(self, page_id, slot_id, tx: Transaction):
+        page = self.page_allocator.get_page(page_id)
         structured_page = StructuredDataRecordPage(page.data)
+        raw = structured_page.read_slot(slot_id)
+        record = self.deserialise(raw)
+        record["i$tx_deleted"] = tx.id
+        serialized_old = structured_page.serialize(self.schema, record, record["i$tx_created"], record["i$tx_deleted"])
+        structured_page.update_slot(slot_id, serialized_old)
+        self.page_allocator.page_manager.write_page(page.id, structured_page.data)
         
-        while structured_page.next_page_id != -1:
+    def delete_at(self, page_id, slot_id):
+        page = self.page_allocator.get_page(page_id)
+        struct_page = StructuredDataRecordPage(page.data)
+        struct_page.delete_slot(slot_id)
+        
+    def insert_at(self, data, page_id, slot_id):
+        page = self.page_allocator.get_page(page_id)
+        struct_page = StructuredDataRecordPage(page.data)
+        raw_data = struct_page.serialize(self.schema, data, data['i$tx_created'], data['i$tx_deleted'])
+        struct_page.update_slot(slot_id, raw_data, undelete=True)
+
+    def delete(self, predicate, tx: Transaction, index_column = None, index_value = None, deferred_index: bool = True):
+        
+        if index_column is not None and index_value is not None and index_column in self.indexes:
+            print('found index')
+            index = self.indexes[index_column]
+            records, locations = self.index_lookup(index_column, index_value, tx.start_snapshot, True)
+            
+            for record, location in zip(records,locations):
+                print(f'{record}, {location}')
+                
+                self.delete_by_location(location[0], location[1], tx)
+                    
+                ta = TXAction(
+                    action_type=TXActionType.DELETE,
+                    table=self,
+                    rid=location,
+                    old_data=record
+                )
+                tx.add_to_timeline(ta)
+            
+                if deferred_index:
+                    tai = TXAction(
+                        action_type=TXActionType.INDEX_DELETE,
+                        table=self,
+                        rid=location,
+                        old_data=None,
+                        new_data=None,
+                        index=index,
+                        key=index_value
+                    )
+                    tx.add_to_timeline(tai)
+            
+            if not deferred_index:
+                self.indexes[index_column].delete(index_value)
+                
+            self.page_allocator.page_manager.flush()
+        
+        else:
+            page = self.page_allocator.get_page(self.first_page_id)
+            structured_page = StructuredDataRecordPage(page.data)
+            
+            while structured_page.next_page_id != -1:
+                for slot_num in range(structured_page.num_slots):
+                    if structured_page._slot_deleted(slot_num) == False:
+                        raw = structured_page.read_slot(slot_num)
+                            
+                        record = self.deserialise(raw)
+                    
+                        if predicate(record):
+                            record['i$tx_deleted'] = tx.id
+                            serialized = structured_page.serialize(self.schema, record, record["i$tx_created"], record["i$tx_deleted"])
+                            structured_page.update_slot(slot_num, serialized)
+                            # structured_page.delete_slot(slot_num)
+                            ta = TXAction(
+                                action_type=TXActionType.DELETE,
+                                table=self,
+                                rid=location,
+                                old_data=record
+                            )
+                            tx.add_to_timeline(ta)
+                
+                self.page_allocator.page_manager.write_page(page.id, structured_page.data)
+                
+                page = self.page_allocator.get_page(structured_page.next_page_id)
+                structured_page = StructuredDataRecordPage(page.data)
+            
             for slot_num in range(structured_page.num_slots):
                 if structured_page._slot_deleted(slot_num) == False:
                     raw = structured_page.read_slot(slot_num)
-                        
-                    record = self.deserialize(raw)
-                
+                            
+                    record = self.deserialise(raw)
+                    
                     if predicate(record):
-                        record['_tx_deleted'] = tx_id
-                        serialized = structured_page.serialize(self.schema, record, record["_tx_created"], record["_tx_deleted"])
+                        # structured_page.delete_slot(slot_num)
+                        record['i$tx_deleted'] = tx.id
+                        serialized = structured_page.serialize(self.schema, record, record["i$tx_created"], record["i$tx_deleted"])
                         structured_page.update_slot(slot_num, serialized)
                         # structured_page.delete_slot(slot_num)
-            
-            self.page_allocator.page_manager.write_page(page.id, structured_page.data)
-            
-            page = self.page_allocator.get_page(structured_page.next_page_id)
-            structured_page = StructuredDataRecordPage(page.data)
-        
-        for slot_num in range(structured_page.num_slots):
-            if structured_page._slot_deleted(slot_num) == False:
-                raw = structured_page.read_slot(slot_num)
+                        ta = TXAction(
+                            action_type=TXActionType.DELETE,
+                            table=self,
+                            rid=location,
+                            old_data=record
+                        )
+                        tx.add_to_timeline(ta)
                         
-                record = self.deserialize(raw)
-                
-                if predicate(record):
-                    structured_page.delete_slot(slot_num)
 
-        self.page_allocator.page_manager.write_page(page.id, structured_page.data)
-        self.page_allocator.page_manager.flush()
+            self.page_allocator.page_manager.write_page(page.id, structured_page.data)
+            self.page_allocator.page_manager.flush()
+            
         
-        
-    def update(self, predicate, new_values: dict, tx_id):
-        page = self.page_allocator.get_page(self.first_page_id)
+    
+    def update_by_location(self, page_id, slot_id, new_values: dict, tx: Transaction):
+        page = self.page_allocator.get_page(page_id)
         structured_page = StructuredDataRecordPage(page.data)
+        raw = structured_page.read_slot(slot_id)
+        record = self.deserialise(raw)
+        record["i$tx_deleted"] = tx.id
+        serialized_old = structured_page.serialize(self.schema, record, record["i$tx_created"], record["i$tx_deleted"])
+        structured_page.update_slot(slot_id, serialized_old)
         
-        page_id_array = []
-        page_id_array.append(self.first_page_id)
-        
-        while structured_page.next_page_id != -1:
-            page_id_array.append(structured_page.next_page_id)
-            for slot_num in range(structured_page.num_slots):
-                if structured_page._slot_deleted(slot_num) == False:
-                    raw = structured_page.read_slot(slot_num)
-                        
-                    record = self.deserialize(raw)
-                
-                    if predicate(record):
-                        
-                        for value in new_values:
-                            if value in self.indexes:
-                                rid = (page.id, slot_num)
-                                old_value = record[value]
-                                new_value = new_values[value]
-                                
-                                self.indexes[value].delete(old_value, rid) # maintain the fcking index
-                                self.indexes[value].insert(new_value, rid)
-                        
-                        
-                        # record.update(new_values)
-                        # serialized = structured_page.serialize(self.schema, record)
-                        # structured_page.update_slot(slot_num, serialized)
-                        
-                        record["_tx_deleted"] = tx_id
-                        serialized_old = structured_page.serialize(self.schema, record, record["_tx_created"], record["_tx_deleted"])
-                        structured_page.update_slot(slot_num, serialized_old)
-                        
-                        # Insert new version
-                        new_record = record.copy()
-                        new_record.update(new_values)
-                        new_record["_tx_created"] = tx_id
-                        new_record["_tx_deleted"] = 0
-                        overflow_page_id, slot_id = self.insert(new_record, tx_id)
-                        # page_id, slot_id = structured_page.insert_record(self.schema, new_record, tx_id)
-            
-            self.page_allocator.page_manager.write_page(page.id, structured_page.data)
-            
-            page = self.page_allocator.get_page(structured_page.next_page_id)
-            structured_page = StructuredDataRecordPage(page.data)
-        
-        for slot_num in range(structured_page.num_slots):
-            if structured_page._slot_deleted(slot_num) == False:
-                raw = structured_page.read_slot(slot_num)
-                
-                record = self.deserialize(raw)
-                
-                if predicate(record):
-                    # record.update(new_values)
-                    record["_tx_deleted"] = tx_id
-                    serialized_old = structured_page.serialize(self.schema, record, record["_tx_created"], record["_tx_deleted"])
-                    structured_page.update_slot(slot_num, serialized_old)
-
-                    # Insert new version
-                    new_record = record.copy()
-                    new_record.update(new_values)
-                    new_record["_tx_created"] = tx_id
-                    new_record["_tx_deleted"] = 0
-                    overflow_page_id, slot_id = self.insert(new_record, tx_id)
-                    
-                    for key, value in new_values.items():
-                        if key in self.indexes:
-                            self.indexes[key].update(value)
-                        
-                    # serialized = structured_page.serialize(self.schema, record, tx_id)
-                    # structured_page.update_slot(slot_num, serialized)
-
+        new_record = record.copy()
+        new_record.update(new_values)
+        new_record["i$tx_created"] = tx.id
+        new_record["i$tx_deleted"] = 0
+        overflow_page_id, slot_id = self.insert(new_record, tx)
         self.page_allocator.page_manager.write_page(page.id, structured_page.data)
-        self.page_allocator.page_manager.flush()
+        
+    def update(self, predicate, new_values: dict, tx: Transaction, index_column = None, index_value = None, deferred_index: bool = True):
+        record: dict = self.scan(predicate, tx.start_snapshot, index_column, index_value)
+        self.delete(predicate, tx, index_column, index_value, deferred_index)
+        record.update(new_values)
+        record["i$tx_created"] = tx.id
+        self.insert(record, tx, deferred_index)
         
     def _read_row_by_position(self, page_id, slot_id):
         page = self.page_allocator.get_page(page_id)
         structured_page = StructuredDataRecordPage(page.data)
         records = []
 
-        if structured_page._slot_deleted(slot_id) == False:
-            raw = structured_page.read_slot(slot_id)
-            record = self.deserialize(raw)
-            records.append(record)
+        # if structured_page._slot_deleted(slot_id) == False: # where its failing
+        
+        raw = structured_page.read_slot(slot_id)
+        record = self.deserialise(raw)
+        records.append(record)
             
         if len(records) == 1:
             return records[0]
@@ -303,34 +358,24 @@ class Table:
         
         return None
 
-    def index_lookup(self, column_name, value, tx_snapshot):
+    def index_lookup(self, column_name, value, tx_snapshot = None, include_locations = False):
         """
         Returns all records matching `value` using the index if it exists,
-        otherwise falls back to a full table scan.
         """
         index = self.get_index(column_name)
         
         if index is not None:
             locations = index.search(value) 
             index_records = [self._read_row_by_position(*loc) for loc in locations]
-            return self._filter_by_tx_snapshot(index_records, tx_snapshot)
-            # return [self._read_row_by_position(*loc) for loc in locations]
-        # else:
-            # fallback: full scan
-            # return [r for r in self.scan_all_records() if r[column_name] == value]
-        
-    def old_scan(self, column_name, value):
-        if column_name in self.indexes:
-            return self.index_lookup(column_name, value)
-        
-        else:
-            all_records = self.scan_all_records()
-            records = [x for x in all_records if x[column_name] == value]
             
-            if len(records) == 1:
-                return records[0]
             
-            return records
+            if include_locations:
+                filtered_records, filtered_locations = self._filter_by_tx_snapshot(index_records, tx_snapshot, locations=locations)
+                return filtered_records, filtered_locations
+            
+            filtered_records = self._filter_by_tx_snapshot(index_records, tx_snapshot)
+            
+            return filtered_records
         
     def scan(self, predicates, tx_snapshot,  index_column=None, index_value=None): # Index column etc is for hinting
         if index_column is not None and index_value is not None and index_column in self.indexes:

@@ -2,6 +2,7 @@ from .records import DataRecordPage
 from .exceptions import DataRecordSlotDoesNotExistException
 from src.config import ENDIAN_TYPE
 from src.datatypes.classes import DataType
+from src.transactions.manager import Transaction
 
 
 class Schema:
@@ -65,7 +66,7 @@ class StructuredDataRecordPage(DataRecordPage):
 
         return bytes(data)
     
-    def deserialize(self, schema: Schema, data: bytes) -> dict:
+    def deserialise(self, schema: Schema, data: bytes) -> dict:
         """Convert bytes back into a Python dict according to the schema."""
         record = {}
         offset = 0
@@ -74,10 +75,10 @@ class StructuredDataRecordPage(DataRecordPage):
         offset += 8
         tx_deleted = int.from_bytes(data[offset:offset+8], byteorder=ENDIAN_TYPE)
         offset += 8
-        record["_tx_created"] = tx_created
-        record["_tx_deleted"] = tx_deleted
+        record["i$tx_created"] = tx_created
+        record["i$tx_deleted"] = tx_deleted
 
-        for name, ftype in schema.fields:
+        for name, ftype, data_length in schema.fields:
             match (ftype):
                 case (DataType.INTEGER):
                     if offset + 4 > len(data):
@@ -102,22 +103,18 @@ class StructuredDataRecordPage(DataRecordPage):
             
         return record
     
-    # def insert_record(self, schema: Schema, record: dict) -> int:
-    def insert_record(self, schema: Schema, record: dict, tx_id: int) -> int:
+    def insert_record(self, schema: Schema, record: dict, tx: Transaction) -> int:
         """Insert a structured record into the page."""
-        serialized = self.serialize(schema, record, tx_created=tx_id)
+        serialized = self.serialize(schema, record, tx_created=tx.id)
         slot_id = self.insert(serialized)
         return slot_id
-        # serialized = self.serialize(schema, record)
-        # slot_id = self.insert(serialized)
-        # return slot_id
 
     def read_record(self, schema: Schema, slot_number: int) -> dict:
         """Read a structured record by slot ID."""
         raw = self.read_slot(slot_number)
         if raw is None:
             raise DataRecordSlotDoesNotExistException(slot_number)
-        return self.deserialize(schema, raw)
+        return self.deserialise(schema, raw)
 
     def update_record(self, schema: Schema, slot_number: int, record: dict):
         """Update an existing record in-place or move it if needed."""

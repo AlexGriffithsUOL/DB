@@ -190,7 +190,7 @@ class SequenceManager:
                 'cache': cache,
                 'cycle': str(cycle)
             },
-            tx.id
+            tx
         )
         
         tx.commit()
