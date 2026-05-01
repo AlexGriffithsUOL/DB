@@ -352,10 +352,7 @@ class BTreeNode(Page):
         
     def update_nearest_key(self, key):
         new_key_idx = bisect.bisect_right(self.keys, key)
-        # new_key_idx = bisect.bisect_left(self.keys, key)
-        # self.keys[new_key_idx] = key
-        if key == 940:
-            print('yay')
+
         if len(self.keys) > 1:
             self.keys[new_key_idx] = key
         else:

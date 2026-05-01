@@ -3,6 +3,8 @@ from src.records.structured_records import Schema, DataType
 from pathlib import Path
 from src.transactions.manager import get_transaction_manager
 import shutil
+from src.server.classes import Server
+from src.operators.classes import TableScan, Filter, Project, NestedLoopJoin, MultiSort, Limit
 
 
 file_path = Path("/home/alex/Programming/DBMS/pysql.db")
@@ -44,44 +46,3 @@ for i in range(3000):
     tm.insert('test', test_record, tx)
     
 tx.commit()
-
-
-tx_a_test = tx_m.get_new_transaction()
-test_record = {
-    'test_id': 50000,
-    'name': 'AlexTest',
-    'ordinal': 8008135
-}
-tm.insert('test', test_record,  tx_a_test)
-tx_a_test.rollback()
-
-
-tx2 = tx_m.get_new_transaction()
-tm.tables['test'].update(lambda x: x['test_id'] == 1000, {'ordinal': 9999}, tx2, 'test_id', 1000 )
-tx2.commit()
-
-tx3 = tx_m.get_new_transaction()
-tm.tables['test'].update(lambda x: x['test_id'] == 1000, {'ordinal': 12}, tx3, 'test_id', 1000 )
-tx3.rollback()
-
-# tx11 = tx_m.get_new_transaction()
-# tm.tables['test']
-
-tx4 = tx_m.get_new_transaction()
-records2 = tm.tables['test'].scan(lambda x: x['test_id'] == 1000, tx4.start_snapshot, index_column = 'test_id', index_value = 1000)
-tx4.commit()
-
-tx5 = tx_m.get_new_transaction()
-tm.tables['test'].delete(lambda x: x['test_id'] == 1000, tx5, 'test_id', 1000)
-tx5.rollback()
-
-tx10 = tx_m.get_new_transaction()
-records2 = tm.tables['test'].scan(lambda x: x['test_id'] == 1000, tx4.start_snapshot, index_column = 'test_id', index_value = 1000)
-tx10.commit()
-
-tx6 = tx_m.get_new_transaction()
-records2 = tm.tables['test'].scan(lambda x: x['test_id'] == 1000, tx6.start_snapshot, index_column = 'test_id', index_value = 1000)
-tx6.commit()
-# tx6.commit()
-
-tm.create_index('idx_system_tables_table_name', 'system_tables', 'table_name', True)

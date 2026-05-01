@@ -19,6 +19,8 @@ from src.table_manager.seed.core.internal_system.system_sequences import SystemS
 from src.transactions.manager import TransactionManager, Transaction
 
 class TableManager:
+    tables: dict[Table]
+    
     def _schema_to_sys_cols_(self, schema, table_id, tx_snapshot):
         columns = []
         table_name = self.system_tables.scan(lambda x: x['table_id'] == table_id, tx_snapshot)['table_name']
@@ -323,9 +325,6 @@ class TableManager:
         
         return False
     
-    # def new_index(self, index_name, table_name, column_name, unique = False):
-        # existing_index
-    
     def create_index(self, index_name, table_name, column_name, unique = False):
         
         tx = self.transaction_manager.get_new_transaction()
@@ -432,3 +431,8 @@ class TableManager:
             self.sequence_manager = SequenceManager(self.system_sequences)
             
         catalog_load_tx.commit()
+        
+# table_manager = TableManager()
+
+def get_table_manager():
+    return TableManager()

@@ -139,9 +139,6 @@ class TransactionManager:
     def get_new_transaction(self):
         transaction_id = self.next_transaction_id()
         
-        if transaction_id == 12:
-            print('I forgot to fucking commit?')
-        
         new_transaction = Transaction(transaction_id, self.last_committed_transaction_id)
         self.add_to_transactions(transaction_id, new_transaction)
         return new_transaction

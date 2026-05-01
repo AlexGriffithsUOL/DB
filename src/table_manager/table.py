@@ -1,9 +1,11 @@
 from src.records.exceptions import DataRecordNotEnoughFreeSpaceException
 from src.records.structured_records import StructuredDataRecordPage, DataType
 from src.config import ENDIAN_TYPE
+from src.operators.classes import TableCursor, IndexScan
 from src.pages.allocator import PageAllocator
 from src.transactions.manager import Transaction
 from src.transactions.actions import TXAction, TXActionType
+from .utils import filter_by_tx_snapshot
 
 class Table:
     def __init__(self, name, schema, first_page_id, page_allocator):
@@ -15,25 +17,6 @@ class Table:
         
     def __repr__(self):
         return f'Table({self.name}, {self.first_page_id}, {self.schema})'
-    
-    def _filter_by_tx_snapshot(self, records, tx_snapshot=None, locations=None):
-        filtered_records = []
-        filtered_locations = []
-        for i, record in enumerate(records):
-            if tx_snapshot is None:
-                # no filtering
-                filtered_records.append(record)
-            else:
-                if record["i$tx_created"] <= tx_snapshot and (record["i$tx_deleted"] == 0 or record["i$tx_deleted"] > tx_snapshot):
-                    filtered_records.append(record)
-                    
-                    if locations is not None:
-                        filtered_locations.append(locations[i])
-        
-        if locations is not None:
-            return filtered_records, filtered_locations
-
-        return filtered_records
     
     def insert(self, record: dict, tx: Transaction, deferred_index: bool = True):
         page = self.page_allocator.get_page(self.first_page_id)
@@ -111,6 +94,12 @@ class Table:
         
         return records, None
     
+    def cursor(self, tx: Transaction) -> TableCursor:
+        return TableCursor(self,tx)
+    
+    def index_scan(self, column_name, key, tx: Transaction):
+        return IndexScan(self, self.indexes[column_name], key, tx)
+    
     def scan_all_records(self, include_rids=False, tx_snapshot=None):        
         page = self.page_allocator.get_page(self.first_page_id)
         structured_page = StructuredDataRecordPage(page.data)
@@ -138,7 +127,7 @@ class Table:
         if include_rids:
             return records, rids
         
-        final_records = self._filter_by_tx_snapshot(records, tx_snapshot)
+        final_records = filter_by_tx_snapshot(records, tx_snapshot)
         
         return final_records
 
@@ -273,7 +262,7 @@ class Table:
                             record['i$tx_deleted'] = tx.id
                             serialized = structured_page.serialize(self.schema, record, record["i$tx_created"], record["i$tx_deleted"])
                             structured_page.update_slot(slot_num, serialized)
-                            # structured_page.delete_slot(slot_num)
+                            
                             ta = TXAction(
                                 action_type=TXActionType.DELETE,
                                 table=self,
@@ -370,10 +359,10 @@ class Table:
             
             
             if include_locations:
-                filtered_records, filtered_locations = self._filter_by_tx_snapshot(index_records, tx_snapshot, locations=locations)
+                filtered_records, filtered_locations = filter_by_tx_snapshot(index_records, tx_snapshot, locations=locations)
                 return filtered_records, filtered_locations
             
-            filtered_records = self._filter_by_tx_snapshot(index_records, tx_snapshot)
+            filtered_records = filter_by_tx_snapshot(index_records, tx_snapshot)
             
             return filtered_records
         

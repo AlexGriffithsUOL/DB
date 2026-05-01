@@ -197,14 +197,13 @@ class DataRecordPage:
             return slot_number
     
     def _safe_write_to_slot(self, slot_number, offset, length):
-        # if not self._slot_deleted(slot_number):
         return self._raw_write_to_slot(slot_number, offset, length)
         
     def _can_fit(self, data_length):
         return self.free_space_size >= data_length
     
     def update_slot(self, slot_number, data, undelete = False):
-        if self._slot_exists(slot_number):# and not self._slot_deleted(slot_number):
+        if self._slot_exists(slot_number):
             slot: SlotHelper = self.slots[slot_number]
             
             new_length = len(data)
@@ -239,7 +238,7 @@ class DataRecordPage:
                 self.free_space_offset = new_offset
                 self.free_space_size -= new_length
 
-                # (Old space remains unused — will be compacted later if needed)
+                # (Old space remains unused will be compacted later if needed)
     
     def _add_slot(self, slot_offset, slot_length):
         slot_start = self.slot_directory_end
@@ -250,7 +249,6 @@ class DataRecordPage:
         self.num_slots += 1
         
     def read_slot(self, slot_number):
-        # if not self._slot_deleted(slot_number) and self._slot_exists(slot_number):
         if self._slot_exists(slot_number):
             slot = self.slots[slot_number]
             return self.data[slot.offset:slot.offset + slot.length]
