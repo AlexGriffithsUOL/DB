@@ -1,10 +1,22 @@
 from src.parser.tokeniser import Tokeniser
+from src.parser.parser import Parser
 
-sql = 'select * from test where test_id = 1000;'
+script = 'select s.*\n' \
+    'from student s\n' \
+    'left outer join school sc on sc.school_id = s.school_id\n'\
+    'where s.student_id >= 2\n'\
+    'and s.school_id = 1;'
 
-tk = Tokeniser()
-tokens = tk.tokenise(sql)
+script2 = "select * from student where name = 'stantonbury' and school_id = 1;"
 
-for t in tokens:
-    print(t)
+t = Tokeniser(script2)
 
+tokens = t.tokenise()
+
+p = Parser(tokens)
+ast = p.parse_select()
+
+
+print(tokens)
+print()
+print(ast)

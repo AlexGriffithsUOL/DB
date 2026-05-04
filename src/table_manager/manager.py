@@ -18,7 +18,7 @@ from src.table_manager.seed.core.internal_system.system_sequences import SystemS
 # from src.transactions.utils import BOOTSTRAP_TX_ID
 from src.transactions.manager import TransactionManager, Transaction
 
-class TableManager:
+class StorageEngine:
     tables: dict[Table]
     
     def _schema_to_sys_cols_(self, schema, table_id, tx_snapshot):
@@ -431,8 +431,9 @@ class TableManager:
             self.sequence_manager = SequenceManager(self.system_sequences)
             
         catalog_load_tx.commit()
-        
-# table_manager = TableManager()
+
+    def open_cursor(self, table_name, tx: Transaction):
+        return self.tables[table_name].cursor(tx)
 
 def get_table_manager():
-    return TableManager()
+    return StorageEngine()

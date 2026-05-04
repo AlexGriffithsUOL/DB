@@ -1,4 +1,4 @@
-from src.table_manager.manager import TableManager, get_table_manager
+from src.table_manager.manager import StorageEngine, get_table_manager
 
 class Server:
     def __init__(self, table_manager = None):

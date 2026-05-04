@@ -1,6 +1,32 @@
+import enum
 from src.transactions.manager import Transaction
 from src.table_manager.utils import single_filter_by_tx_snapshot
 from src.records.structured_records import StructuredDataRecordPage
+from src.parser.tokens import TOKENS
+
+class EqualityOperatorEnum(enum.Enum):
+    EQ = '=='
+    GT = '>'
+    GTE = '>='
+    LT = '<'
+    LTE = '<='
+    BETWEEN = 'BETWEEN'
+    
+    @classmethod
+    def LOWER(cls):
+        return (cls.LT.value, cls.LTE.value)
+    
+    @classmethod
+    def GREATER(cls):
+        return (cls.GT.value, cls.GTE.value)
+    
+    @classmethod
+    def INCLUSIVE(cls):
+        return (cls.LTE.value, cls.GTE.value, cls.BETWEEN.value)
+    
+    @classmethod
+    def EXCLUSIVE(cls):
+        return (cls.LT.value, cls.GT.value)
 
 class BaseOperation:
     def open(self):
@@ -47,10 +73,12 @@ class TableCursor:
 
 class TableScan(BaseOperation):
     def __init__(self, table: "Table", tx: "Transaction"):
+        self.table = table
+        self.tx = tx
         self.cursor = TableCursor(table, tx)
 
     def open(self):
-        pass  # Cursor is already ready
+        self.cursor = TableCursor(self.table, self.tx)
 
     def next(self):
         return self.cursor.next()
@@ -59,16 +87,28 @@ class TableScan(BaseOperation):
         pass
     
 class IndexScan(BaseOperation):
-    def __init__(self, table, index, key, tx):
+    def __init__(self, table, index, operator: EqualityOperatorEnum, tx: Transaction, upper_bound_or_key = None, lower_bound = None):
         self.table = table
         self.index = index
-        self.key = key
+        self.upper_bound_or_key = upper_bound_or_key
+        self.lower_bound = lower_bound
         self.tx = tx
         self.locations = None
         self.pos = 0
+        self.operator: EqualityOperatorEnum = operator
 
     def open(self):
-        self.locations = self.index.search(self.key)
+        if self.operator == EqualityOperatorEnum.EQ.value:
+            self.locations = self.index.search(self.upper_bound_or_key)
+            
+        if self.operator in EqualityOperatorEnum.LOWER():
+            self.locations = self.index.range_scan(None, self.upper_bound_or_key, self.operator)
+        
+        if self.operator in EqualityOperatorEnum.GREATER():
+            self.locations = self.index.range_scan(self.upper_bound_or_key, None, self.operator)
+            
+        if self.operator == EqualityOperatorEnum.BETWEEN.value:
+            self.locations = self.index.range_scan(self.lower_bound, self.upper_bound_or_key, self.operator)
 
     def next(self):
         while self.pos < len(self.locations):
@@ -119,10 +159,13 @@ class Project(BaseOperation):
             returning = dict()
             
             for column_name in self.column_names:
-                if column_name in result:
-                    returning[column_name] = result[column_name]
-                else:
-                    raise Exception(f'{column_name} not in column names, try {",".join(self.column_names)}')
+                if column_name != TOKENS.TIMES:
+                    if column_name in result:
+                        returning[column_name] = result[column_name]
+                    else:
+                        raise Exception(f'{column_name} not in column names, try {",".join(self.column_names)}')
+                if column_name == TOKENS.TIMES:
+                    returning = result
                 
             return returning
         
@@ -246,6 +289,92 @@ class Limit(BaseOperation):
         if result is not None:
             self.count += 1
         return result
+
+    def close(self):
+        self.operation.close()
+        
+class Aggregate(BaseOperation):
+    def __init__(self, operation: BaseOperation, agg_funcs: dict, group_by: list[str] = None):
+        """
+        operation: upstream operation (TableScan, Filter, etc.)
+        agg_funcs: dict mapping column -> aggregate type, e.g., {'salary': 'SUM', 'id': 'COUNT'}
+        group_by: list of column names to group by, optional
+        """
+        self.operation = operation
+        self.agg_funcs = agg_funcs
+        self.group_by = group_by
+        self.result_iter = None
+
+    def open(self):
+        self.operation.open()
+        self.aggregates = {}
+
+        # Collect all rows and compute aggregates
+        while True:
+            row = self.operation.next()
+            if row is None:
+                break
+
+            # Compute group key
+            key = tuple(row[col] for col in self.group_by) if self.group_by else None
+
+            if key not in self.aggregates:
+                # Initialize aggregation dictionary for this group
+                self.aggregates[key] = {col: None for col in self.agg_funcs}
+                if 'COUNT' in self.agg_funcs.values():
+                    self.aggregates[key]['COUNT'] = 0
+
+            agg_row = self.aggregates[key]
+
+            # Update each aggregate
+            for col, func in self.agg_funcs.items():
+                val = row[col]
+
+                if func == 'SUM':
+                    agg_row[col] = (agg_row[col] or 0) + val
+                elif func == 'COUNT':
+                    agg_row[col] = (agg_row.get(col, 0) or 0) + 1
+                elif func == 'MIN':
+                    agg_row[col] = val if agg_row[col] is None else min(agg_row[col], val)
+                elif func == 'MAX':
+                    agg_row[col] = val if agg_row[col] is None else max(agg_row[col], val)
+                elif func == 'AVG':
+                    # store sum/count temporarily for AVG
+                    if agg_row[col] is None:
+                        agg_row[col] = {'sum': val, 'count': 1}
+                    else:
+                        agg_row[col]['sum'] += val
+                        agg_row[col]['count'] += 1
+                else:
+                    raise Exception(f"Unknown aggregate function: {func}")
+
+        # Prepare final results
+        final_results = []
+        for key, agg_row in self.aggregates.items():
+            result = {}
+
+            # Include group by columns
+            if key is not None:
+                for i, col_name in enumerate(self.group_by):
+                    result[col_name] = key[i]
+
+            # Finalize aggregate values
+            for col, func in self.agg_funcs.items():
+                if func == 'AVG':
+                    s = agg_row[col]['sum']
+                    c = agg_row[col]['count']
+                    result[col] = s / c if c != 0 else None
+                else:
+                    result[col] = agg_row[col]
+
+            final_results.append(result)
+
+        self.result_iter = iter(final_results)
+
+    def next(self):
+        if self.result_iter:
+            return next(self.result_iter, None)
+        return None
 
     def close(self):
         self.operation.close()

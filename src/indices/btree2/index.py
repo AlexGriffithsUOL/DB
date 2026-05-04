@@ -2,6 +2,7 @@ import bisect
 from .string_nodes import BTreeNode
 from .nodes import BTreeNode as NumericNode
 from .utils import Directions
+from src.operators.classes import EqualityOperatorEnum
 from src.datatypes.classes import StringDataType, IntegerDataType
         
 class BTreeIndex:
@@ -77,19 +78,52 @@ class BTreeIndex:
         
         return root.search(low, ret_leaf=True)
     
-    def range_scan(self, low, high):
+    def range_scan(self, low=None, high=None, operator: EqualityOperatorEnum = EqualityOperatorEnum.EQ.value):
+        
+        if low is None and high is None:
+            raise Exception('Range scan needs at least a lower or higher number.')
+            
         leaf = self._find_low_leaf(low)
         results = []
-
+            
         while leaf:
+                
             for key, value in zip(leaf.keys, leaf.pointers):
-                if key < low:
-                    continue
-                if key > high:
-                    return results
-                results.append(value)
+                
+                if operator in EqualityOperatorEnum.EXCLUSIVE():
+                    if low is not None:
+                        if key < low:
+                            continue
+                        
+                    if high is not None:
+                        if key >= high:
+                            return results
+                    results.append(value)
+                
+                if operator in EqualityOperatorEnum.INCLUSIVE():
+                    if low is not None:
+                        if key < low:
+                            continue
+                        
+                    if high is not None:
+                        if key > high:
+                            return results
+                    results.append(value)
+                        
             leaf = leaf.get_next_leaf()
         return results
+                    
+                    
+
+        # while leaf:
+        #     for key, value in zip(leaf.keys, leaf.pointers):
+        #         if key < low:
+        #             continue
+        #         if key > high:
+        #             return results
+        #         results.append(value)
+        #     leaf = leaf.get_next_leaf()
+        # return results
     
     def _merge_leaf_node(self, source_node: BTreeNode, target_node: BTreeNode, direction: Directions):
         if direction == Directions.RIGHT:
